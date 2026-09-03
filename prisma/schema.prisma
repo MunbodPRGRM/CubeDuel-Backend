@@ -1,0 +1,103 @@
+// CubeDuel — Prisma schema
+// แหล่งความจริง: docs/database-schema.md (12 ตาราง)
+// สถานะ: โครงเปล่า — enum ครบแล้ว, ตารางยังไม่เขียน (เฟส 1 รอบเต็ม)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- enum (ประกาศครั้งเดียว ใช้ซ้ำทุกตาราง ห้ามประกาศซ้ำ) ----------
+
+enum CubeType {
+  CUBE_2X2X2  @map("2x2x2")
+  CUBE_3X3X3  @map("3x3x3")
+  PYRAMINX    @map("pyraminx")
+  PYRAMORPHIX @map("pyramorphix")
+}
+
+enum UserRole {
+  MEMBER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum RoomType {
+  COMPETITIVE
+  CUSTOM
+}
+
+enum RoomMode {
+  AUTO
+  CUSTOM
+}
+
+enum SolveResult {
+  SOLVED
+  DNF
+  SURRENDERED
+}
+
+enum OAuthProvider {
+  GOOGLE
+  FACEBOOK
+}
+
+enum ReportStatus {
+  PENDING
+  RESOLVED
+}
+
+enum ReportAction {
+  NONE
+  WARNING
+  SUSPENDED
+  RATING_RESET
+}
+
+enum FlagReason {
+  IMPOSSIBLE_TIME
+  LOW_MOVE_COUNT
+  HIGH_TPS
+  MOVE_GAP
+  WIN_STREAK
+}
+
+enum FlagVerdict {
+  CLEAN
+  CHEATING
+  INCONCLUSIVE
+}
+
+// ---------- ตาราง (TODO เฟส 1 รอบเต็ม — เขียนตาม docs/database-schema.md) ----------
+//
+// กลุ่มผู้ใช้ + auth
+//   [ ] User                          — ไม่มีคอลัมน์ elo_rating (อยู่ใน Rating)
+//   [ ] OAuthAccount            ➕
+//   [ ] PasswordResetToken      ➕
+//   [ ] RefreshToken            ➕
+//
+// กลุ่มการแข่งขัน
+//   [ ] Match
+//   [ ] Rating                        — composite PK (user_id, cube_type) 4 แถวต่อคน
+//   [ ] MultiplayerMatch
+//   [ ] MultiplayerMatchParticipant
+//
+// กลุ่มเนื้อหา + ดูแลระบบ
+//   [ ] Report
+//   [ ] News
+//   [ ] MatchFlag               ➕
+//   [ ] AdminAuditLog           ➕
+//
+// อย่าลืม:
+//   - CHECK constraint ของ MatchFlag / Report ต้องใส่เป็น raw SQL ในไฟล์ migration
+//   - index ทั้งหมดตามหัวข้อ "Index ที่ต้องมี" ใน database-schema.md
+//   - NULL ในคอลัมน์เวลา = DNF/DNS เสมอ

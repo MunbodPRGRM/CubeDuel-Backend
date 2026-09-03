@@ -1,0 +1,22 @@
+# --- dependency ---
+node_modules/
+
+# --- build output ---
+dist/
+*.tsbuildinfo
+
+# --- ตัวแปรสภาพแวดล้อม (ห้าม commit — .env.example ต้อง track ไว้) ---
+.env
+.env.local
+.env.*.local
+
+# --- log / ไฟล์ชั่วคราว ---
+*.log
+npm-debug.log*
+coverage/
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

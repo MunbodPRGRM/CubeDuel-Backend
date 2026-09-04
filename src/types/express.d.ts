@@ -5,6 +5,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: User;
+      /** ค่าที่ผ่าน validateQuery แล้ว — Express 4 เขียนทับ req.query ไม่ได้ */
+      validatedQuery?: unknown;
     }
   }
 }

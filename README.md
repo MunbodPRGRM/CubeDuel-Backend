@@ -105,7 +105,7 @@ src/
 ├── middleware/       auth (requireAuth/requireAdmin) · validate (Zod) · rate-limit · error handler
 ├── schemas/          กฎ validation ของ request แต่ละแบบ (Zod)
 ├── services/         ตรรกะจริง — route แค่รับส่ง ไม่มีตรรกะ
-├── routes/index.ts   REST — health + /auth + /users
+├── routes/index.ts   REST — health + /auth + /users + /leaderboard
 └── sockets/index.ts  Socket.IO — ตอนนี้เป็นโครงเปล่า
 prisma/
 ├── schema.prisma     12 ตารางครบ
@@ -139,6 +139,10 @@ scripts/
 | `POST /api/v1/auth/change-password` | เพิกถอนทุกเซสชันหลังเปลี่ยน |
 | `DELETE /api/v1/auth/account` | soft delete ตาม ADR-008 |
 | `GET /api/v1/users/me` | ข้อมูลตัวเอง |
+| `GET /api/v1/users/:userId/ratings` | Elo + อันดับครบทั้ง 4 ประเภท 🔸 |
+| `GET /api/v1/leaderboard?cubeType=3x3x3` | กระดานอันดับ (`scope=all` เท่านั้น) 🔸 |
+
+🔸 = **เป็นงานเฟส 7 ที่ดึงมาทำก่อน** เพราะหน้าจอตามภาพดีไซน์ต้องใช้ข้อมูลจริง (ADR-024) — `scope=weekly` ยังตอบ `E_VALIDATION` อยู่
 
 ยังไม่ได้ทำในเฟส 2: **OAuth Google/Facebook** · **ลืมรหัสผ่าน/รีเซ็ตรหัสผ่าน** (ต้องเลือกบริการส่งอีเมลก่อน) · UI ฝั่ง frontend
 

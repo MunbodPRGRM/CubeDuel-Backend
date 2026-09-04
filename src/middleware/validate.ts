@@ -13,3 +13,21 @@ export function validateBody<T extends ZodTypeAny>(schema: T): RequestHandler {
     next();
   };
 }
+
+/**
+ * ตรวจ query string — Express 4 เขียนทับ `req.query` ตรง ๆ ไม่ได้
+ * จึงเก็บค่าที่ผ่าน parse ไว้ที่ `req.validatedQuery` แทน (ดู src/types/express.d.ts)
+ */
+export function validateQuery<T extends ZodTypeAny>(schema: T): RequestHandler {
+  return (req, _res, next) => {
+    const result = schema.safeParse(req.query);
+    if (!result.success) return next(result.error);
+    req.validatedQuery = result.data;
+    next();
+  };
+}
+
+/** อ่านค่าที่ validateQuery เก็บไว้ แบบมี type */
+export function queryOf<T extends ZodTypeAny>(req: { validatedQuery?: unknown }): z.infer<T> {
+  return req.validatedQuery as z.infer<T>;
+}

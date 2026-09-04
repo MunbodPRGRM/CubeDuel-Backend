@@ -43,16 +43,19 @@ CubeDuel/
 ```bash
 npm install
 cp .env.example .env      # แล้วแก้ DATABASE_URL ให้ตรงเครื่องตัวเอง
-npx prisma migrate dev    # (เฟส 1 ยังไม่มีตาราง — ดูหัวข้อ "สถานะ")
+npx prisma migrate dev    # สร้าง 12 ตาราง
+npm run seed              # ผู้ใช้ทดสอบ 10 คน (รหัสผ่านทุกบัญชี Password123!)
 npm run dev               # http://localhost:4000
 ```
 
 ตรวจว่าขึ้นจริง:
 
 ```bash
-curl http://localhost:4000/api/health
-# {"status":"ok","ts":1788439413057}
+curl http://localhost:4000/api/v1/health
+# {"status":"ok","db":"ok","uptime":12}
 ```
+
+> base path คือ **`/api/v1`** ตาม `docs/api-contract.md` ข้อ 1 (ของเดิม `/api` เลิกใช้แล้ว — ADR-023)
 
 ## คำสั่งที่มี
 
@@ -76,7 +79,10 @@ curl http://localhost:4000/api/health
 | `PORT` | `4000` | ตลอด |
 | `CORS_ORIGIN` | `http://localhost:5173` | ตลอด |
 | `DATABASE_URL` | — (**บังคับ**) | ตลอด |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | — | เฟส 2 |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | — (**บังคับ**) | ตลอด — ต้องไม่ซ้ำกัน และห้ามเป็นค่า `change-me` ตอน production |
+| `JWT_ACCESS_EXPIRES` / `JWT_REFRESH_EXPIRES` | `15m` / `30d` | ADR-010 |
+| `FRONTEND_URL` | ตามค่า `CORS_ORIGIN` | OAuth redirect + ลิงก์รีเซ็ตรหัสผ่าน |
+| `DISABLE_RATE_LIMIT` | `false` | ตั้ง `true` เฉพาะตอน dev เวลายิงทดสอบรัว ๆ |
 | `GOOGLE_*` / `FACEBOOK_*` | — | เฟส 2 (OAuth) |
 
 ## โครงสร้างโค้ด
@@ -84,19 +90,28 @@ curl http://localhost:4000/api/health
 ```
 src/
 ├── index.ts          จุดเริ่ม — สร้าง http server + ผูก Express กับ Socket.IO
-├── app.ts            ประกอบ Express (cors, json, /api)
+├── app.ts            ประกอบ Express (cors, json, cookie, /api/v1, error handler)
 ├── constants.ts      ค่า K ของ Elo + ค่าเวลาของ state machine
 ├── config/env.ts     อ่านและตรวจตัวแปรสภาพแวดล้อมที่เดียว
 ├── types/cube.ts     4 ประเภทรูบิค + map ไป enum ของ Prisma
+├── types/api.ts      แปลง DB (snake_case + enum ตัวใหญ่) → API (camelCase + ตัวเล็ก) ที่เดียว
+├── types/express.d.ts  ต่อ type ให้ req.user
 ├── lib/elo.ts        สูตร Elo
+├── lib/errors.ts     AppError + รหัส error ทั้ง 8 ตัวตามสัญญา API
+├── lib/jwt.ts        เซ็น/ตรวจ access + refresh token
+├── lib/password.ts   bcrypt
+├── lib/tokens.ts     สุ่ม token + SHA-256
 ├── lib/prisma.ts     PrismaClient ตัวเดียวใช้ทั้งแอป
-├── routes/index.ts   REST — ตอนนี้มีแค่ GET /api/health
+├── middleware/       auth (requireAuth/requireAdmin) · validate (Zod) · rate-limit · error handler
+├── schemas/          กฎ validation ของ request แต่ละแบบ (Zod)
+├── services/         ตรรกะจริง — route แค่รับส่ง ไม่มีตรรกะ
+├── routes/index.ts   REST — health + /auth + /users
 └── sockets/index.ts  Socket.IO — ตอนนี้เป็นโครงเปล่า
 prisma/
-├── schema.prisma     enum ครบ 12 ตัวแล้ว · ตาราง 12 ตารางยังไม่เขียน
-└── seed.ts           ยังว่าง
+├── schema.prisma     12 ตารางครบ
+└── seed.ts           ผู้ใช้ทดสอบ 10 คน + Rating 40 แถว
 scripts/
-└── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating (ยังว่าง)
+└── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating
 ```
 
 ## กฎที่ห้ามละเมิด (สรุปจาก `docs/`)
@@ -110,11 +125,22 @@ scripts/
 - `NULL` ในคอลัมน์เวลา = **DNF/DNS เสมอ** ห้ามใช้ 0 แทน
 - ทุก endpoint ใต้ `/admin` ที่เปลี่ยนข้อมูล ต้องเขียน `AdminAuditLog` ในทรานแซกชันเดียวกัน
 
-## สถานะ (2026-09-03) — เฟส 1
+## สถานะ (2026-09-04) — เฟส 2 (ระบบสมาชิกด้วยรหัสผ่าน)
 
-ใช้งานได้แล้ว: `GET /api/health` · โครง Express + Socket.IO ขึ้นได้ · ESLint/Prettier ตั้งแล้ว
+ใช้งานได้แล้ว:
 
-ยังไม่ได้ทำ: ตารางใน `schema.prisma` (12 ตาราง) · seed · auth ทั้งหมด · event ของ Socket.IO ทุกตัว
+| Endpoint | หมายเหตุ |
+|---|---|
+| `GET /api/v1/health` | เช็ค DB ด้วย |
+| `POST /api/v1/auth/register` | สร้าง `Rating` 4 แถวในทรานแซกชันเดียว · rate limit 5/ชม. |
+| `POST /api/v1/auth/login` | ใช้ username หรือ email · rate limit 10/15 นาที |
+| `POST /api/v1/auth/refresh` | rotation + ตรวจจับการใช้ token ซ้ำ (ADR-013) |
+| `POST /api/v1/auth/logout` · `/logout-all` | เพิกถอนเครื่องนี้ / ทุกเครื่อง |
+| `POST /api/v1/auth/change-password` | เพิกถอนทุกเซสชันหลังเปลี่ยน |
+| `DELETE /api/v1/auth/account` | soft delete ตาม ADR-008 |
+| `GET /api/v1/users/me` | ข้อมูลตัวเอง |
+
+ยังไม่ได้ทำในเฟส 2: **OAuth Google/Facebook** · **ลืมรหัสผ่าน/รีเซ็ตรหัสผ่าน** (ต้องเลือกบริการส่งอีเมลก่อน) · UI ฝั่ง frontend
 
 หมายเหตุ: `prisma/seed.ts` กับ `scripts/` ไม่ได้อยู่ใน `tsconfig.json` (รันด้วย `tsx` ไม่ได้ build ลง `dist/`) — ยังโดน ESLint ตรวจตามปกติ
 

@@ -1,0 +1,12 @@
+# บังคับให้ไฟล์ข้อความเก็บใน git เป็น LF เสมอ ไม่ว่าจะแก้จากเครื่องไหน
+# ถ้าไม่มีบรรทัดนี้ พอทำงานสองเครื่องจะเกิด diff ปลอมทั้งไฟล์เพราะ CRLF/LF ไม่ตรงกัน
+* text=auto eol=lf
+
+# ไฟล์ไบนารี ห้ามแตะ
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.docx binary

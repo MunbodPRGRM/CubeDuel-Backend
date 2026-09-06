@@ -1,8 +1,14 @@
 /**
  * สถานะคิวบ์ฝั่ง server — โหลด KPuzzle ของแต่ละประเภทและตรวจว่า "แก้เสร็จ" หรือยัง
  *
- * ที่มา: docs/game-rules.md ข้อ 11, ADR-018 (ห้าม move หมุนทั้งลูก → สถานะแก้เสร็จมีแบบเดียว)
- * และ ADR-019 (Pyramorphix ยืม KPuzzle ของ 2x2x2 แต่ตรวจแก้เสร็จคนละกติกา)
+ * ที่มา: docs/game-rules.md ข้อ 11 · ADR-019 (Pyramorphix ยืม KPuzzle ของ 2x2x2 แต่ตรวจ
+ * แก้เสร็จคนละกติกา) · **ADR-030** ที่แก้ข้ออ้างเดิมของ ADR-018 ว่า "ห้าม move หมุนทั้งลูก
+ * แล้วสถานะแก้เสร็จจะมีแบบเดียว" — ไม่จริง เพราะ `U D'` (2x2x2) กับ `Uw D'` (3x3x3)
+ * ประกอบกันเป็นการหมุนทั้งลูกได้ทั้งที่เป็น move หมุนชั้นล้วน ๆ
+ *
+ * ⚠️ กติกาในไฟล์นี้ต้องตรงกับฝั่ง client (`frontend/src/cube/index.ts` +
+ * `pyramorphix-model.ts`) เป๊ะ ๆ ไม่งั้นผู้เล่นจะเห็นว่าแก้เสร็จแล้วแต่ server ตอบ
+ * `E_NOT_SOLVED` — ไม่มีอะไรเตือนถ้าลืม (ADR-021)
  */
 import { Alg } from 'cubing/alg';
 import type { KPattern, KPuzzle } from 'cubing/kpuzzle';
@@ -77,8 +83,10 @@ export async function getApexSlots(): Promise<number[]> {
 /**
  * Pyramorphix แก้เสร็จ = ตำแหน่งถูกครบ 8 ชิ้น AND ทิศทางถูกเฉพาะ 4 ชิ้นที่เป็นยอดพีระมิด
  * (อีก 4 ชิ้นโผล่เป็นสามเหลี่ยมสีเดียว มองไม่ออกว่าหมุนไปทางไหน — ADR-019)
+ *
+ * ตัวนี้เป็นแบบ **ไม่ยอมให้ทั้งลูกหมุน** — ตัวที่ใช้จริงคือ `isPyramorphixSolved` ด้านล่าง
  */
-function isPyramorphixSolved(pattern: KPattern, apexSlots: readonly number[]): boolean {
+function isPyramorphixSolvedInPlace(pattern: KPattern, apexSlots: readonly number[]): boolean {
   const orbit = pattern.patternData[CORNERS_ORBIT]!;
   for (let slot = 0; slot < 8; slot++) {
     if (orbit.pieces[slot] !== slot) return false;
@@ -87,12 +95,35 @@ function isPyramorphixSolved(pattern: KPattern, apexSlots: readonly number[]): b
   return true;
 }
 
+/** 24 ท่ายืนของลูกบาศก์ ประกอบจาก move หมุนทั้งลูกของ cubing.js */
+const WHOLE_ROTATIONS = ['', 'x', 'x2', "x'", 'z', "z'"].flatMap((tilt) =>
+  ['', 'y', 'y2', "y'"].map((spin) => [tilt, spin].filter(Boolean).join(' ')),
+);
+
+/**
+ * กติกาที่ใช้จริง — เหมือนด้านบนแต่ **ยอมให้ทั้งลูกถูกหมุนไปทั้งก้อน** (ADR-030)
+ * ตรวจโดยลองหมุนกลับทั้ง 24 ท่า ถ้าท่าไหนเข้าเกณฑ์แบบเข้มก็ถือว่าแก้เสร็จ
+ */
+function isPyramorphixSolved(pattern: KPattern, apexSlots: readonly number[]): boolean {
+  return WHOLE_ROTATIONS.some((alg) =>
+    isPyramorphixSolvedInPlace(alg === '' ? pattern : pattern.applyAlg(new Alg(alg)), apexSlots),
+  );
+}
+
 // ---------------------------------------------------------------- API หลัก
 
 export async function isSolved(cubeType: CubeType, pattern: KPattern): Promise<boolean> {
   if (cubeType === 'pyramorphix') return isPyramorphixSolved(pattern, await getApexSlots());
+
+  // Pyraminx ใช้ `experimentalIsSolved` ไม่ได้ (ADR-018) — แต่ไม่ต้องใช้: move หมุนชั้นของ
+  // Pyraminx ไม่เคยย้ายชิ้นมุมออกจากตำแหน่ง จึงประกอบเป็นการหมุนทั้งลูกไม่ได้เลย
   const kpuzzle = await getKPuzzle(cubeType);
-  return pattern.isIdentical(kpuzzle.defaultPattern());
+  if (cubeType === 'pyraminx') return pattern.isIdentical(kpuzzle.defaultPattern());
+
+  return pattern.experimentalIsSolved({
+    ignorePuzzleOrientation: true,
+    ignoreCenterOrientation: true,
+  });
 }
 
 /** สถานะหลังใส่ scramble ให้คิวบ์ที่แก้เสร็จแล้ว */

@@ -1,0 +1,14 @@
+
+# ---------------------------------------------------------------------------
+# <type>(<scope>): <ทำอะไร — ภาษาไทย>
+#
+# type  : feat fix refactor chore docs test style
+# scope : backend  → auth db socket room match elo stats admin api config
+#         frontend → ui cube room auth stats admin api config
+#         docs     → roadmap adr spec design poc readme
+#
+# กฎ: บอกว่า "ทำอะไร" ไม่ใช่ "แก้ไฟล์ไหน" · 1 commit = 1 เรื่อง
+#     ถ้าอ้าง ADR ให้ใส่ท้ายในวงเล็บ เช่น (ADR-021)
+#
+# ตัวอย่าง: feat(auth): สมัครสมาชิก + สร้าง Rating 4 ประเภทในทรานแซกชันเดียว
+# ---------------------------------------------------------------------------

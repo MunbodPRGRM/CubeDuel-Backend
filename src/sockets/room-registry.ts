@@ -98,8 +98,9 @@ export function clearMembership(userId: number): void {
   membershipByUser.delete(userId);
 }
 
-/** ลบห้องออกจากทะเบียนทั้งสามดัชนี */
+/** ลบห้องออกจากทะเบียนทั้งสามดัชนี + ล้างตัวจับเวลาของห้อง (ที่เดียวที่ล้าง — ADR-035 ข้อ 8) */
 export function disposeRoom(room: Room): void {
+  room.clearTimers();
   rooms.delete(room.roomId);
   if (room.roomCode) roomsByCode.delete(room.roomCode);
   for (const userId of room.players.keys()) {

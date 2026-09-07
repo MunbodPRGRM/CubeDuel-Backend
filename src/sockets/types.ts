@@ -129,6 +129,55 @@ export interface RoomReadyPayload {
 export type LeaveReason = 'left' | 'disconnected' | 'kicked';
 export type AbortReason = 'player_left' | 'timeout' | 'host_left';
 
+export interface SolveMovePayload {
+  /** เริ่มที่ 1 เพิ่มทีละ 1 — ข้ามหรือซ้ำ = `E_SEQ_MISMATCH` */
+  seq: number;
+  /** notation ตัวเดียว เช่น `R`, `U'`, `F2` — ห้ามหลาย move ใน string เดียว */
+  move: string;
+  clientTs: number;
+}
+
+export interface SolveSolvedPayload {
+  seq: number;
+  moveCount: number;
+  clientTs: number;
+}
+
+export interface SolveSolvedResult {
+  solveTimeMs: number;
+  rankNo: number;
+}
+
+export type DnfReason = 'surrender' | 'timeout' | 'disconnect' | 'invalid';
+
+// ---------------------------------------------------------------- ผลการแข่งขัน
+
+export interface MatchResultEntry {
+  userId: number;
+  username: string;
+  /** null = DNF */
+  solveTimeMs: number | null;
+  moveCount: number;
+  rankNo: number;
+  /** null = ห้องที่ไม่ปรับคะแนน */
+  eloBefore: number | null;
+  eloAfter: number | null;
+  eloChange: number | null;
+}
+
+export interface MatchResult {
+  /** null = ห้องที่ไม่บันทึก DB */
+  matchId: number | null;
+  roomKind: RoomKind;
+  cubeType: CubeType;
+  scramble: string;
+  /** true เฉพาะห้องแข่งขัน + ห้องหลายคนโหมด auto */
+  ratingApplied: boolean;
+  /** เรียงตาม rankNo แล้ว client ไม่ต้องเรียงเอง */
+  results: MatchResultEntry[];
+  finishedAtTs: number;
+}
+
 // ---------------------------------------------------------------- event map
 
 export interface ClientToServerEvents {
@@ -138,6 +187,12 @@ export interface ClientToServerEvents {
   'room:rejoin': (payload: RoomRejoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'room:leave': (payload: Record<string, never>, ack?: AckFn<null>) => void;
   'room:ready': (payload: RoomReadyPayload, ack?: AckFn<null>) => void;
+  'room:start': (payload: Record<string, never>, ack?: AckFn<null>) => void;
+  'solve:ready': (payload: Record<string, never>, ack?: AckFn<null>) => void;
+  /** ไม่มี ack เพื่อความลื่น — server เงียบถ้าผ่าน ผิดเมื่อไรส่ง event `error` */
+  'solve:move': (payload: SolveMovePayload) => void;
+  'solve:solved': (payload: SolveSolvedPayload, ack?: AckFn<SolveSolvedResult>) => void;
+  'solve:surrender': (payload: Record<string, never>, ack?: AckFn<null>) => void;
 }
 
 export interface ServerToClientEvents {
@@ -148,6 +203,35 @@ export interface ServerToClientEvents {
   'room:ready_changed': (payload: { userId: number; ready: boolean }) => void;
   'room:spectator_count': (payload: { count: number }) => void;
   'room:aborted': (payload: { reason: AbortReason; message: string }) => void;
+
+  'match:loading': (payload: { scramble: string; cubeType: CubeType; deadlineTs: number }) => void;
+  'match:countdown': (payload: { startsAtTs: number; durationMs: number }) => void;
+  'match:inspection_started': (payload: { endsAtTs: number; durationMs: number }) => void;
+  'match:started': (payload: { serverStartTs: number }) => void;
+  'match:final_countdown': (payload: {
+    firstSolverUserId: number;
+    endsAtTs: number;
+    durationMs: number;
+  }) => void;
+  'match:finished': (payload: MatchResult) => void;
+
+  'opponent:move': (payload: {
+    userId: number;
+    seq: number;
+    move: string;
+    serverTs: number;
+  }) => void;
+  'opponent:progress': (payload: { userId: number; moveCount: number; elapsedMs: number }) => void;
+  'player:solved': (payload: {
+    userId: number;
+    solveTimeMs: number;
+    moveCount: number;
+    rankNo: number;
+  }) => void;
+  'player:dnf': (payload: { userId: number; reason: DnfReason }) => void;
+  'player:disconnected': (payload: { userId: number; graceEndsAtTs: number }) => void;
+  'player:reconnected': (payload: { userId: number }) => void;
+
   error: (payload: AckError) => void;
 }
 

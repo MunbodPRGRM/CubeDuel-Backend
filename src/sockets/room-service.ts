@@ -21,6 +21,12 @@ import {
   type ServerToClientEvents,
 } from './types.js';
 
+/** ผู้เล่นที่เพิ่งเสีย socket ตัวสุดท้ายไป — ผู้เรียก `leaveRoom` เอาไปเริ่มนับ grace ต่อ */
+export interface DisconnectedPlayer {
+  room: Room;
+  userId: number;
+}
+
 /** ห้องนี้กำลังแข่งอยู่ไหม — ใช้ตัดสินว่าออกจากห้องกลางคันได้หรือเปล่า */
 export function isRoomActive(room: Room): boolean {
   return ACTIVE_STATES.includes(room.state);
@@ -90,18 +96,35 @@ export async function joinAsPlayer(
       username: socket.data.username,
       nickname: socket.data.nickname,
       eloRating: await eloOf(userId, room.cubeType),
-      isReady: false,
     });
     emitToRoom(io, room, 'room:player_joined', { player: room.toPublicPlayer(player) });
   }
 
+  const wasDisconnected = player.sockets.size === 0;
   player.sockets.add(socket.id);
   socket.data.roomId = room.roomId;
   socket.data.seat = 'player';
   setMembership(userId, room.roomId, 'player');
   await socket.join(playerRoomName(room.roomId));
   room.touch();
+
+  // กลับมาทันภายใน grace → ยกเลิกตัวนับ แล้วบอกทั้งห้องว่ากลับมาแล้ว (game-rules.md ข้อ 6)
+  if (wasDisconnected) cancelDisconnectGrace(io, room, userId);
   broadcastState(io, room);
+}
+
+/**
+ * ยกเลิก grace ของผู้เล่นที่กลับมาแล้ว
+ *
+ * อยู่ที่ไฟล์นี้ (ไม่ใช่ `match.ts`) เพราะเป็นแค่การล้างตัวจับเวลา ไม่มีตรรกะของแมตช์
+ * — ถ้าย้ายไปฝั่งโน้นจะกลายเป็น import วนกันสองไฟล์
+ */
+export function cancelDisconnectGrace(io: TypedServer, room: Room, userId: number): void {
+  const timer = room.graceTimers.get(userId);
+  if (!timer) return;
+  clearTimeout(timer);
+  room.graceTimers.delete(userId);
+  emitToRoom(io, room, 'player:reconnected', { userId });
 }
 
 export async function joinAsSpectator(
@@ -164,12 +187,16 @@ export function abortRoom(io: TypedServer, room: Room, reason: AbortReason, mess
  * **ยึดห้องจาก membership ไม่ใช่ `socket.data.roomId`** เพราะ socket ที่สั่งอาจยังไม่เคยเข้าห้องนั้น
  * (เช่นเปิดแท็บใหม่แล้วสั่ง `room:join` ทั้งที่แท็บเดิมยังอยู่ในอีกห้อง)
  */
-export function leaveRoom(io: TypedServer, socket: TypedSocket, reason: LeaveReason): void {
+export function leaveRoom(
+  io: TypedServer,
+  socket: TypedSocket,
+  reason: LeaveReason,
+): DisconnectedPlayer | null {
   const { userId } = socket.data;
   const membership = membershipOf(userId);
   socket.data.roomId = null;
   socket.data.seat = null;
-  if (!membership) return;
+  if (!membership) return null;
 
   const { room } = membership;
   const player = room.players.get(userId);
@@ -179,44 +206,32 @@ export function leaveRoom(io: TypedServer, socket: TypedSocket, reason: LeaveRea
       player.sockets.delete(socket.id);
       detachSockets(io, room, [socket.id]);
       // ปิดไปแค่แท็บเดียว ยังมีแท็บอื่นอยู่ → ยังไม่ถือว่าออกจากห้อง
-      if (player.sockets.size > 0) return;
-      // TODO(ก้อนที่ 2): grace 30 วินาที + DNF/ABORT ตาม game-rules.md ข้อ 6
-      // ตอนนี้ยังไปถึง state ที่กำลังแข่งไม่ได้ (ยังไม่มี room:start) จึงยังไม่ต้องมีตัวจับเวลา
+      if (player.sockets.size > 0) return null;
       broadcastState(io, room);
-      return;
+      // ผู้เรียกเป็นคนเริ่มนับ grace เอง (ไม่ทำที่นี่เพื่อไม่ให้ import วนกับ match.ts)
+      return { room, userId };
     }
-
-    room.removePlayer(userId);
-    clearMembership(userId);
-    // ส่งก่อนถอด socket เพื่อให้แท็บอื่นของคนที่ออกรู้ด้วยว่าไม่ได้อยู่ในห้องแล้ว
-    emitToRoom(io, room, 'room:player_left', { userId, reason });
-    detachSockets(io, room, [...player.sockets, socket.id]);
 
     if (isRoomActive(room)) {
-      // ออกกลางแมตช์ — ก้อนที่ 2 จะเปลี่ยนเป็น DNF ตามข้อ 6 แทนการยุบห้องทั้งใบ
-      abortRoom(io, room, 'player_left', 'ผู้เล่นออกจากห้องระหว่างแข่ง ห้องนี้จึงถูกยกเลิก');
-      return;
+      // ออกกลางแมตช์ไม่ได้ ไม่งั้นจะใช้หนีผลแพ้ได้ — ต้องกด "ยอมแพ้" แล้วรอผล (ADR-035 ข้อ 10)
+      throw socketErrors.invalidState(
+        'ระหว่างแข่งออกจากห้องไม่ได้ ถ้าไม่เล่นต่อให้กด "ยอมแพ้" แล้วรอผลการแข่งขัน',
+      );
     }
 
-    const newHost = room.reassignHostIfNeeded();
-    if (newHost !== null) emitToRoom(io, room, 'room:host_changed', { newHostUserId: newHost });
-
-    if (room.players.size === 0) {
-      abortRoom(io, room, 'host_left', 'ไม่มีผู้เล่นเหลืออยู่ในห้องแล้ว');
-      return;
-    }
-    broadcastState(io, room);
-    return;
+    detachSockets(io, room, [socket.id]);
+    removePlayerFromRoom(io, room, userId, reason);
+    return null;
   }
 
   // ผู้ชม
   const spectatorSockets = room.spectators.get(userId);
-  if (!spectatorSockets) return;
+  if (!spectatorSockets) return null;
 
   if (reason === 'disconnected') {
     detachSockets(io, room, [socket.id]);
     // คืน false = ยังมีแท็บอื่นดูอยู่ → ยังไม่ถือว่าออกจากห้อง
-    if (!room.removeSpectatorSocket(userId, socket.id)) return;
+    if (!room.removeSpectatorSocket(userId, socket.id)) return null;
   } else {
     detachSockets(io, room, [...spectatorSockets, socket.id]);
     room.removeSpectator(userId);
@@ -225,4 +240,40 @@ export function leaveRoom(io: TypedServer, socket: TypedSocket, reason: LeaveRea
   clearMembership(userId);
   emitToRoom(io, room, 'room:spectator_count', { count: room.spectatorCount });
   if (room.isEmpty) disposeRoom(room);
+  return null;
+}
+
+/**
+ * ถอดผู้เล่นออกจากห้องทั้งคน — ใช้ทั้งตอนกดออกเองและตอนหลุดการเชื่อมต่อจนหมด grace
+ * (ไม่ต้องมี socket ก็เรียกได้ เพราะคนที่หลุดไปแล้วไม่เหลือ socket ให้อ้าง)
+ */
+export function removePlayerFromRoom(
+  io: TypedServer,
+  room: Room,
+  userId: number,
+  reason: LeaveReason,
+): void {
+  const player = room.players.get(userId);
+  if (!player) return;
+
+  const timer = room.graceTimers.get(userId);
+  if (timer) {
+    clearTimeout(timer);
+    room.graceTimers.delete(userId);
+  }
+
+  room.removePlayer(userId);
+  if (membershipOf(userId)?.roomId === room.roomId) clearMembership(userId);
+  // ส่งก่อนถอด socket เพื่อให้แท็บอื่นของคนที่ออกรู้ด้วยว่าไม่ได้อยู่ในห้องแล้ว
+  emitToRoom(io, room, 'room:player_left', { userId, reason });
+  detachSockets(io, room, player.sockets);
+
+  const newHost = room.reassignHostIfNeeded();
+  if (newHost !== null) emitToRoom(io, room, 'room:host_changed', { newHostUserId: newHost });
+
+  if (room.players.size === 0) {
+    abortRoom(io, room, 'host_left', 'ไม่มีผู้เล่นเหลืออยู่ในห้องแล้ว');
+    return;
+  }
+  broadcastState(io, room);
 }

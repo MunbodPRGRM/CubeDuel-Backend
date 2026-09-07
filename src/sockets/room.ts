@@ -1,5 +1,6 @@
 /**
- * ห้องหนึ่งห้องในหน่วยความจำ — ยังไม่มีลำดับการแข่ง (ก้อนที่ 2 จะมาต่อที่นี่)
+ * ห้องหนึ่งห้องในหน่วยความจำ — เก็บ "ข้อมูล" ของห้องอย่างเดียว
+ * ส่วน "ลำดับการแข่ง" อยู่ที่ `match.ts` และการเข้า/ออกอยู่ที่ `room-service.ts`
  *
  * กติกาที่ยึด: `docs/game-rules.md` ข้อ 9 (ห้องสร้างเอง/ผู้ชม/การโอน host)
  * ตัวตนของผู้เล่นคือ `userId` **ไม่ใช่ socket id** — คนหนึ่งเปิดได้หลายแท็บ (ADR-034 ข้อ 3)
@@ -18,6 +19,13 @@ import type {
 /** ผู้ชมสูงสุดต่อห้อง (game-rules.md ข้อ 9) */
 export const MAX_SPECTATORS = 50;
 
+/** หนึ่ง move ใน move stream — `ms` คือเวลาที่ **server ได้รับ** นับจาก `serverStartTs` */
+export interface RecordedMove {
+  seq: number;
+  move: string;
+  ms: number;
+}
+
 export interface RoomPlayer {
   userId: number;
   username: string;
@@ -29,10 +37,31 @@ export interface RoomPlayer {
   sockets: Set<string>;
   /** ลำดับที่เข้าห้อง เริ่มที่ 1 — คนแรกคือ `player1_id` ตอนบันทึก DB (database-schema.md) */
   seatNo: number;
-  // ---- ความคืบหน้าตอนแข่ง (ก้อนที่ 2 เป็นคนเขียน) ----
+  // ---- ความคืบหน้าตอนแข่ง ----
   moveCount: number;
   status: SolveStatus;
   solveTimeMs: number | null;
+  /** แจ้ง `solve:ready` แล้วหรือยัง (ช่วง LOADING) */
+  loaded: boolean;
+  /** move stream ของรอบนี้ — ใช้ replay ตอน `solve:solved` และคัดลง`MatchFlag` ถ้าเข้าเกณฑ์ soft */
+  moves: RecordedMove[];
+  /** อันดับในรอบนี้ ได้ค่าตอนแก้เสร็จหรือตอนจบแมตช์ */
+  rankNo: number | null;
+}
+
+/** ค่าเริ่มต้นของความคืบหน้า — ใช้ทั้งตอนเข้าห้องและตอนเริ่มรอบใหม่ในห้องเดิม (ADR-035 ข้อ 3) */
+function freshProgress(): Pick<
+  RoomPlayer,
+  'moveCount' | 'status' | 'solveTimeMs' | 'loaded' | 'moves' | 'rankNo'
+> {
+  return {
+    moveCount: 0,
+    status: 'solving',
+    solveTimeMs: null,
+    loaded: false,
+    moves: [],
+    rankNo: null,
+  };
 }
 
 export interface RoomOptions {
@@ -70,6 +99,15 @@ export class Room {
 
   #nextSeatNo = 1;
 
+  /**
+   * ตัวจับเวลาทั้งหมดของห้อง — **ห้ามมี `setTimeout` ของห้องอยู่นอกที่นี่** (ADR-035 ข้อ 8)
+   * ห้องถูกยุบได้ทุกจังหวะ ถ้าลืมล้างจะมี callback วิ่งใส่ห้องที่ตายไปแล้ว
+   */
+  phaseTimer: NodeJS.Timeout | null = null;
+  hardTimeoutTimer: NodeJS.Timeout | null = null;
+  progressTimer: NodeJS.Timeout | null = null;
+  readonly graceTimers = new Map<number, NodeJS.Timeout>();
+
   constructor(options: RoomOptions) {
     this.roomId = options.roomId;
     this.roomKind = options.roomKind;
@@ -99,15 +137,14 @@ export class Room {
   // ---------------------------------------------------------------- ผู้เล่น
 
   addPlayer(
-    profile: Omit<RoomPlayer, 'sockets' | 'seatNo' | 'moveCount' | 'status' | 'solveTimeMs'>,
+    profile: Pick<RoomPlayer, 'userId' | 'username' | 'nickname' | 'eloRating'>,
   ): RoomPlayer {
     const player: RoomPlayer = {
       ...profile,
+      isReady: false,
       sockets: new Set(),
       seatNo: this.#nextSeatNo++,
-      moveCount: 0,
-      status: 'solving',
-      solveTimeMs: null,
+      ...freshProgress(),
     };
     this.players.set(player.userId, player);
     this.hostUserId ??= player.userId;
@@ -162,6 +199,42 @@ export class Room {
     this.spectators.delete(userId);
     this.touch();
     return true;
+  }
+
+  // ---------------------------------------------------------------- รอบการแข่ง
+
+  /** เริ่มรอบใหม่ในห้องเดิม — ล้างความคืบหน้าของทุกคนและ scramble เก่าทิ้ง */
+  resetForNewRound(): void {
+    this.clearTimers();
+    this.scramble = null;
+    this.phaseEndsAtTs = null;
+    this.serverStartTs = null;
+    for (const player of this.players.values()) {
+      Object.assign(player, freshProgress());
+      player.isReady = false;
+    }
+    this.touch();
+  }
+
+  /** ผู้เล่นที่ยังแก้อยู่ (ยังไม่ solved / dnf / surrendered) */
+  stillSolving(): RoomPlayer[] {
+    return [...this.players.values()].filter((player) => player.status === 'solving');
+  }
+
+  clearPhaseTimer(): void {
+    if (this.phaseTimer) clearTimeout(this.phaseTimer);
+    this.phaseTimer = null;
+  }
+
+  /** ล้างตัวจับเวลาทุกชนิดของห้อง — เรียกจาก `disposeRoom()` ที่เดียว (ADR-035 ข้อ 8) */
+  clearTimers(): void {
+    this.clearPhaseTimer();
+    if (this.hardTimeoutTimer) clearTimeout(this.hardTimeoutTimer);
+    if (this.progressTimer) clearInterval(this.progressTimer);
+    this.hardTimeoutTimer = null;
+    this.progressTimer = null;
+    for (const timer of this.graceTimers.values()) clearTimeout(timer);
+    this.graceTimers.clear();
   }
 
   // ---------------------------------------------------------------- snapshot

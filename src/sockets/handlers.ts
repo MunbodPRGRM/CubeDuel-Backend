@@ -11,10 +11,14 @@ import {
   roomJoinSchema,
   roomReadySchema,
   roomRejoinSchema,
+  solveMoveSchema,
+  solveSolvedSchema,
 } from '../schemas/socket.schema.js';
 import { on, type TypedServer, type TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
+import { handleMove, handleSolved, handleSurrender, markLoaded, startMatch } from './match.js';
 import { createRoom, getRoom, getRoomByCode, membershipOf } from './room-registry.js';
+import type { Room } from './room.js';
 import {
   broadcastState,
   emitToRoom,
@@ -26,6 +30,13 @@ import {
 
 /** เพดานของ RTT ที่ยอมรับจาก client — สูงกว่านี้ถือว่าเน็ตเสียหรือค่าปลอม */
 const MAX_REPORTED_RTT_MS = 1_000;
+
+/** ห้องที่ socket นี้อยู่ — ทุก event ของการแข่งต้องผ่านตัวนี้ก่อน */
+function requireRoom(socket: TypedSocket): Room {
+  const membership = membershipOf(socket.data.userId);
+  if (!membership) throw socketErrors.roomNotFound('ยังไม่ได้อยู่ในห้องไหน');
+  return membership.room;
+}
 
 export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
   // ---------------------------------------------------------------- net
@@ -111,6 +122,30 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     return null;
   });
 
-  // TODO(ก้อนที่ 2): room:start + ลำดับ LOADING → COUNTDOWN → INSPECTION → SOLVING
-  //                 + solve:move / solve:solved / solve:surrender + บันทึก Match
+  // ---------------------------------------------------------------- ลำดับการแข่ง
+
+  on(socket, 'room:start', emptyPayloadSchema, async (socket) => {
+    await startMatch(io, requireRoom(socket), socket.data.userId);
+    return null;
+  });
+
+  on(socket, 'solve:ready', emptyPayloadSchema, (socket) => {
+    markLoaded(io, requireRoom(socket), socket.data.userId);
+    return null;
+  });
+
+  // ไม่มี ack — client ส่งแล้วไปต่อเลย ผิดเมื่อไรได้ event `error` กลับไป
+  on(socket, 'solve:move', solveMoveSchema, (socket, payload) => {
+    handleMove(io, socket, requireRoom(socket), payload);
+    return null;
+  });
+
+  on(socket, 'solve:solved', solveSolvedSchema, (socket, payload) =>
+    handleSolved(io, socket, requireRoom(socket), payload),
+  );
+
+  on(socket, 'solve:surrender', emptyPayloadSchema, (socket) => {
+    handleSurrender(io, requireRoom(socket), socket.data.userId);
+    return null;
+  });
 }

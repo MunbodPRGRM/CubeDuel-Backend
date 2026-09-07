@@ -40,3 +40,16 @@ export const roomRejoinSchema = z.object({
 export const roomReadySchema = z.object({
   ready: z.boolean(),
 });
+
+export const solveMoveSchema = z.object({
+  seq: z.number().int().positive(),
+  // notation ตัวเดียวเท่านั้น — ห้ามส่งหลาย move รวมใน string เดียว (socket-events.md ข้อ 7)
+  move: z.string().trim().min(1).max(4),
+  clientTs: z.number().int().nonnegative(),
+});
+
+export const solveSolvedSchema = z.object({
+  seq: z.number().int().nonnegative(),
+  moveCount: z.number().int().nonnegative(),
+  clientTs: z.number().int().nonnegative(),
+});

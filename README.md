@@ -70,6 +70,7 @@ curl http://localhost:4000/api/v1/health
 | `npm run prisma:studio` | เปิด Prisma Studio ดูข้อมูลใน DB |
 | `npm run seed` | ใส่ข้อมูลทดสอบ (`prisma/seed.ts`) |
 | `npm run smoke:socket` | ทดสอบวงจรชีวิตห้องผ่าน Socket.IO จริง (ต้องมี `npm run dev` รันอยู่ + seed แล้ว) |
+| `npm run smoke:match` | เล่นแมตช์จนจบจริงแล้วตรวจแถวใน DB (~2 นาที เพราะรอ inspection/grace ของจริง) |
 
 ## ตัวแปรสภาพแวดล้อม
 
@@ -98,6 +99,7 @@ src/
 ├── types/api.ts      แปลง DB (snake_case + enum ตัวใหญ่) → API (camelCase + ตัวเล็ก) ที่เดียว
 ├── types/express.d.ts  ต่อ type ให้ req.user
 ├── lib/elo.ts        สูตร Elo
+├── lib/anti-cheat.ts เกณฑ์ soft ของ anti-cheat (pure function ล้วน)
 ├── lib/errors.ts     AppError + รหัส error ทั้ง 8 ตัวตามสัญญา API
 ├── lib/jwt.ts        เซ็น/ตรวจ access + refresh token
 ├── lib/password.ts   bcrypt
@@ -116,6 +118,7 @@ src/
     ├── room.ts           ห้องหนึ่งห้องในหน่วยความจำ + snapshot
     ├── room-registry.ts  ทะเบียนห้องทั้งหมด + สุ่ม room_code + หาห้องร้าง
     ├── room-service.ts   เข้า/ออกห้อง · โอน host · ยุบห้อง (ที่เดียวที่เรียก socket.join)
+    ├── match.ts          state machine ของแมตช์ + ตัวจับเวลาทุกช่วง (ADR-035)
     ├── handlers.ts       ผูก event ทั้งหมดเข้ากับ socket
     └── index.ts          ประกอบทั้งหมด + สวีปเปอร์ห้องร้าง
 prisma/
@@ -123,7 +126,8 @@ prisma/
 └── seed.ts           ผู้ใช้ทดสอบ 10 คน + Rating 40 แถว
 scripts/
 ├── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating
-└── smoke-socket.ts          ทดสอบห้อง Socket.IO กับ server จริง
+├── smoke-socket.ts          ทดสอบห้อง Socket.IO กับ server จริง
+└── smoke-match.ts           เล่นแมตช์จนจบจริงแล้วตรวจ DB
 ```
 
 ## กฎที่ห้ามละเมิด (สรุปจาก `docs/`)

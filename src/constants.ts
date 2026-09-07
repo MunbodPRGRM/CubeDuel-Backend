@@ -1,5 +1,6 @@
 /** ค่าคงที่ของฝั่ง server — ที่มา: docs/game-rules.md, docs/api-contract.md */
 import { CubeType } from '@prisma/client';
+import type { ApiCubeType } from './types/cube.js';
 
 export const ELO_K_FACTOR = 32;
 export const ELO_INITIAL_RATING = 1000;
@@ -7,6 +8,29 @@ export const ELO_INITIAL_RATING = 1000;
 export const COUNTDOWN_MS = 3_000;
 export const INSPECTION_MS = 15_000;
 export const FINAL_COUNTDOWN_MS = 10_000;
+
+/** รอ `solve:ready` ครบทุกคนได้นานสุดเท่านี้ แล้วไปต่อเอง (game-rules.md ข้อ 1) */
+export const LOADING_TIMEOUT_MS = 15_000;
+
+/** หลุดการเชื่อมต่อแล้วมีเวลากลับมาเท่านี้ (game-rules.md ข้อ 6) */
+export const DISCONNECT_GRACE_MS = 30_000;
+
+/** ความถี่ของ `opponent:progress` (socket-events.md ข้อ 7 — ต้อง throttle จริง) */
+export const PROGRESS_INTERVAL_MS = 500;
+
+/** ชดเชย latency ได้ไม่เกินเท่านี้ กัน client ปลอม RTT สูงเพื่อลดเวลาตัวเอง (game-rules.md ข้อ 3) */
+export const MAX_LATENCY_COMPENSATION_MS = 150;
+
+/**
+ * ไม่มีใครแก้เสร็จเลย ห้องจะจบเองเมื่อครบเวลานี้นับจากเริ่ม SOLVING แล้วทุกคนได้ DNF
+ * (game-rules.md ข้อ 4 — กันห้องค้างถาวรเพราะมีคนเปิดทิ้งไว้)
+ */
+export const HARD_TIMEOUT_MS: Record<ApiCubeType, number> = {
+  '2x2x2': 5 * 60_000,
+  '3x3x3': 10 * 60_000,
+  pyraminx: 5 * 60_000,
+  pyramorphix: 5 * 60_000,
+};
 
 /**
  * ทุกประเภทรูบิค — ใช้ตอนสมัครสมาชิกเพื่อสร้างแถว Rating ให้ครบ 4 แถว

@@ -69,6 +69,7 @@ curl http://localhost:4000/api/v1/health
 | `npm run prisma:migrate` | `prisma migrate dev` |
 | `npm run prisma:studio` | เปิด Prisma Studio ดูข้อมูลใน DB |
 | `npm run seed` | ใส่ข้อมูลทดสอบ (`prisma/seed.ts`) |
+| `npm run smoke:socket` | ทดสอบวงจรชีวิตห้องผ่าน Socket.IO จริง (ต้องมี `npm run dev` รันอยู่ + seed แล้ว) |
 
 ## ตัวแปรสภาพแวดล้อม
 
@@ -106,12 +107,23 @@ src/
 ├── schemas/          กฎ validation ของ request แต่ละแบบ (Zod)
 ├── services/         ตรรกะจริง — route แค่รับส่ง ไม่มีตรรกะ
 ├── routes/index.ts   REST — health + /auth + /users + /leaderboard
-└── sockets/index.ts  Socket.IO — ตอนนี้เป็นโครงเปล่า
+└── sockets/          Socket.IO (เฟส 4 — ADR-034)
+    ├── types.ts          สัญญา event ทั้งหมด **ไฟล์เดียว** ต้องตรงกับ frontend/src/socket/types.ts
+    ├── errors.ts         SocketError + รหัส error ของ socket (คนละชุดกับ REST)
+    ├── ack.ts            ตัวห่อ handler: Zod → rate limit → ack { ok, data | error }
+    ├── auth.ts           ตรวจ JWT ตอน handshake
+    ├── rate-limit.ts     token bucket ต่อ socket ต่อ event
+    ├── room.ts           ห้องหนึ่งห้องในหน่วยความจำ + snapshot
+    ├── room-registry.ts  ทะเบียนห้องทั้งหมด + สุ่ม room_code + หาห้องร้าง
+    ├── room-service.ts   เข้า/ออกห้อง · โอน host · ยุบห้อง (ที่เดียวที่เรียก socket.join)
+    ├── handlers.ts       ผูก event ทั้งหมดเข้ากับ socket
+    └── index.ts          ประกอบทั้งหมด + สวีปเปอร์ห้องร้าง
 prisma/
 ├── schema.prisma     12 ตารางครบ
 └── seed.ts           ผู้ใช้ทดสอบ 10 คน + Rating 40 แถว
 scripts/
-└── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating
+├── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating
+└── smoke-socket.ts          ทดสอบห้อง Socket.IO กับ server จริง
 ```
 
 ## กฎที่ห้ามละเมิด (สรุปจาก `docs/`)

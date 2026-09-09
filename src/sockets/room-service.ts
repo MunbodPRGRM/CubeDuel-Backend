@@ -50,7 +50,7 @@ export function broadcastState(io: TypedServer, room: Room): void {
 }
 
 /** Elo ของประเภทที่ห้องนี้แข่ง (Rating แยก 4 แถวต่อคน — ไม่ได้อยู่ในตาราง User) */
-async function eloOf(userId: number, cubeType: Room['cubeType']): Promise<number> {
+export async function eloOf(userId: number, cubeType: Room['cubeType']): Promise<number> {
   const rating = await prisma.rating.findUnique({
     where: { userId_cubeType: { userId, cubeType: CUBE_TYPE_TO_PRISMA[cubeType] } },
     select: { eloRating: true },
@@ -175,6 +175,17 @@ export function abortRoom(io: TypedServer, room: Room, reason: AbortReason, mess
   io.socketsLeave(playerRoomName(room.roomId));
   io.socketsLeave(spectatorRoomName(room.roomId));
   disposeRoom(room);
+
+  /**
+   * งานเก็บกวาดของคนสร้างห้อง — ตอนนี้มีที่เดียวคือคิวจับคู่ ที่ต้องส่งคนที่ยังต่ออยู่
+   * กลับเข้าคิว (ADR-039 ข้อ 6) · เรียก **หลัง** `disposeRoom` เพื่อให้ membership ถูกล้างก่อน
+   * ล้มที่ hook ต้องไม่ทำให้การยุบห้องซึ่งทำไปเรียบร้อยแล้วพังตาม
+   */
+  try {
+    room.onAbort?.(room);
+  } catch (error) {
+    console.error(`[socket] onAbort ของห้อง ${room.roomId} ล้มเหลว`, error);
+  }
 }
 
 /**

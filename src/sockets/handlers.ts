@@ -7,6 +7,7 @@
 import {
   emptyPayloadSchema,
   netPingSchema,
+  queueJoinSchema,
   roomCreateSchema,
   roomJoinSchema,
   roomReadySchema,
@@ -17,6 +18,7 @@ import {
 import { on, type TypedServer, type TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import { handleMove, handleSolved, handleSurrender, markLoaded, startMatch } from './match.js';
+import { joinQueue, leaveQueue } from './queue.js';
 import { createRoom, getRoom, getRoomByCode, membershipOf } from './room-registry.js';
 import type { Room } from './room.js';
 import {
@@ -52,6 +54,15 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     }
     return { serverTs: Date.now(), clientTs: payload.clientTs };
   });
+
+  // ---------------------------------------------------------------- คิวจับคู่
+
+  /** เข้าคิวหาคู่ — หนึ่งคนอยู่ได้ช่องเดียว และเข้าคิวพร้อมกับอยู่ในห้องไม่ได้ (ADR-039 ข้อ 1) */
+  on(socket, 'queue:join', queueJoinSchema, (socket, payload) => joinQueue(io, socket, payload));
+
+  on(socket, 'queue:leave', emptyPayloadSchema, (socket) => ({
+    left: leaveQueue(socket.data.userId),
+  }));
 
   // ---------------------------------------------------------------- ห้อง
 

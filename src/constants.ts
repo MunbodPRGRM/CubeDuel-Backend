@@ -12,6 +12,18 @@ export const FINAL_COUNTDOWN_MS = 10_000;
 /** รอ `solve:ready` ครบทุกคนได้นานสุดเท่านี้ แล้วไปต่อเอง (game-rules.md ข้อ 1) */
 export const LOADING_TIMEOUT_MS = 15_000;
 
+/** เจอคู่แล้วหน่วงให้ดูข้อมูลคู่แข่งเท่านี้ก่อนเข้า LOADING เอง (game-rules.md ข้อ 1) */
+export const MATCHED_DELAY_MS = 2_000;
+
+/** ความถี่ที่กวาดคิวจับคู่ (ADR-039 ข้อ 7) */
+export const QUEUE_TICK_MS = 1_000;
+
+/** ความถี่ที่ส่ง `queue:status` ให้คนที่รออยู่ (socket-events.md ข้อ 4) */
+export const QUEUE_STATUS_INTERVAL_MS = 5_000;
+
+/** รอคิวเกินเท่านี้ = ยกเลิกคิว แจ้ง `queue:timeout` (game-rules.md ข้อ 8) */
+export const QUEUE_TIMEOUT_MS = 180_000;
+
 /** หลุดการเชื่อมต่อแล้วมีเวลากลับมาเท่านี้ (game-rules.md ข้อ 6) */
 export const DISCONNECT_GRACE_MS = 30_000;
 

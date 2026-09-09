@@ -9,6 +9,7 @@
  *   - ส่ง "เวลาสิ้นสุด" (`endsAtTs`) ไม่ใช่ "เหลืออีกกี่วินาที"
  *   - ตัวจับเวลาทุกตัวต้องอยู่บน `Room` เพื่อให้ `disposeRoom()` ล้างได้ที่เดียว (ADR-035 ข้อ 8)
  */
+import { env } from '../config/env.js';
 import {
   COUNTDOWN_MS,
   DISCONNECT_GRACE_MS,
@@ -57,23 +58,40 @@ function stillSolving(room: Room): RoomPlayer[] {
  * เงื่อนไข: ผู้เล่นครบตามจำนวน + ทุกคนยังต่ออยู่ (ADR-035 ข้อ 2)
  */
 export async function startMatch(io: TypedServer, room: Room, userId: number): Promise<void> {
+  /**
+   * ห้องแข่งขันเริ่มเอง — ถ้าเปิดปุ่มนี้ไว้ คู่ที่นัดกันจะกด "เล่นอีกครั้ง" ปั๊มคะแนนซ้ำ ๆ ได้
+   * (ADR-039 ข้อ 5) · ยกเว้นบนเครื่อง dev ที่เปิดสวิตช์ทดสอบไว้ ซึ่งสร้างห้องแข่งขันเองได้อยู่แล้ว
+   * และ `npm run smoke:rated` ใช้ทางนี้ (ADR-038 ข้อ 5) — production ปิดตายทั้งสองทาง
+   */
+  if (room.roomKind === 'competitive' && !env.allowTestCompetitiveRoom) {
+    throw socketErrors.invalidState('ห้องแข่งขันเริ่มให้อัตโนมัติ กดเริ่มเองไม่ได้');
+  }
   if (!room.isHost(userId)) throw socketErrors.notHost('เฉพาะหัวห้องเท่านั้นที่กดเริ่มได้');
   if (room.state !== 'WAITING' && room.state !== 'FINISHED') {
     throw socketErrors.invalidState('ห้องนี้กำลังแข่งอยู่');
   }
+  await beginLoading(io, room);
+}
+
+/**
+ * เริ่มรอบใหม่จริง ๆ — ใช้ทั้งจาก `room:start` (ห้องสร้างเอง) และจากคิวจับคู่ (ADR-039 ข้อ 5)
+ * ผู้เรียกเป็นคนตรวจ state ที่ตัวเองยอมรับมาก่อน ที่นี่ตรวจแค่ความพร้อมของผู้เล่น
+ */
+export async function beginLoading(io: TypedServer, room: Room): Promise<void> {
   if (!room.isFull) throw socketErrors.invalidState('ต้องมีผู้เล่นครบก่อนจึงจะเริ่มได้');
   if ([...room.players.values()].some((player) => player.sockets.size === 0)) {
     throw socketErrors.invalidState('มีผู้เล่นหลุดการเชื่อมต่ออยู่ รอให้กลับมาก่อน');
   }
 
+  const stateBefore = room.state;
   room.resetForNewRound();
 
   // 📕 server เป็นคน generate เท่านั้น ห้ามให้ client เลือก scramble ที่ง่ายให้ตัวเอง
   const [scramble] = await generateScrambles(room.cubeType, 1);
   if (!scramble) throw socketErrors.internal('สร้าง scramble ไม่สำเร็จ');
 
-  // ระหว่าง await ห้องอาจถูกยุบไปแล้ว (คนออกหมด / โดนสวีปเปอร์เก็บ)
-  if (room.state !== 'WAITING' && room.state !== 'FINISHED') return;
+  // ระหว่าง await ห้องอาจถูกยุบหรือเดินหน้าไปแล้ว (คนออกหมด / โดนสวีปเปอร์เก็บ)
+  if (room.state !== stateBefore) return;
 
   room.scramble = scramble;
   room.state = 'LOADING';
@@ -364,6 +382,7 @@ export function beginDisconnectGrace(io: TypedServer, room: Room, userId: number
           // ผลที่บันทึกไปแล้วไม่ถูกแตะ แค่ไม่ให้ที่นั่งค้างจนคนที่เหลือเริ่มรอบใหม่ไม่ได้
           removePlayerFromRoom(io, room, userId, 'disconnected');
           return;
+        case 'MATCHED':
         case 'LOADING':
         case 'COUNTDOWN':
         case 'INSPECTION':

@@ -16,7 +16,8 @@
     "seed": "tsx prisma/seed.ts",
     "smoke:socket": "tsx scripts/smoke-socket.ts",
     "smoke:match": "tsx scripts/smoke-match.ts",
-    "smoke:rated": "tsx scripts/smoke-rated.ts"
+    "smoke:rated": "tsx scripts/smoke-rated.ts",
+    "smoke:queue": "tsx scripts/smoke-queue.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

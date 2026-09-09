@@ -5,6 +5,7 @@ import { disposeLimiter, type TypedServer, type TypedSocket } from './ack.js';
 import { authMiddleware } from './auth.js';
 import { registerHandlers } from './handlers.js';
 import { beginDisconnectGrace } from './match.js';
+import { removeSocketFromQueue } from './queue.js';
 import { findExpiredRooms, ROOM_IDLE_TIMEOUT_MS } from './room-registry.js';
 import { abortRoom, leaveRoom } from './room-service.js';
 
@@ -30,6 +31,8 @@ export function createSocketServer(httpServer: HttpServer): TypedServer {
     registerHandlers(io, socket);
 
     socket.on('disconnect', () => {
+      // อยู่ระหว่างรอคิว → ออกจากคิวทันที ไม่มี grace (game-rules.md ข้อ 6)
+      removeSocketFromQueue(socket.id);
       // socket ตัวสุดท้ายของผู้เล่นหลุด → เริ่มนับ grace 30 วินาที (game-rules.md ข้อ 6)
       const dropped = leaveRoom(io, socket, 'disconnected');
       if (dropped) beginDisconnectGrace(io, dropped.room, dropped.userId);

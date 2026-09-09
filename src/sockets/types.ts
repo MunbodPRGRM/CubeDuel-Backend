@@ -101,6 +101,37 @@ export interface NetPingResult {
   clientTs: number;
 }
 
+/** คิวจับคู่อัตโนมัติ — `multiplayer` ยังไม่เปิด (เฟส 6) ปฏิเสธที่ชั้น schema */
+export type QueueKind = 'competitive' | 'multiplayer';
+
+export interface QueueJoinPayload {
+  cubeType: CubeType;
+  kind: QueueKind;
+}
+export interface QueueJoinResult {
+  queuedAtTs: number;
+  playersInQueue: number;
+}
+export interface QueueLeaveResult {
+  /** false = ไม่ได้อยู่ในคิวอยู่แล้ว (ไม่ถือว่าผิดพลาด) */
+  left: boolean;
+}
+export interface QueueStatusPayload {
+  waitedMs: number;
+  /** null = เลิกจำกัดช่วงคะแนนแล้ว (รอเกิน 120 วิ — game-rules.md ข้อ 8) */
+  eloWindow: number | null;
+  /** จำนวนคนในคิวช่องเดียวกัน (kind + cubeType) รวมตัวเอง */
+  playersInQueue: number;
+}
+export interface QueueMatchedPayload {
+  roomId: number;
+  cubeType: CubeType;
+  players: PlayerPublic[];
+}
+export interface QueueTimeoutPayload {
+  waitedMs: number;
+}
+
 export interface RoomCreatePayload {
   cubeType: CubeType;
   kind: 'custom' | 'multiplayer';
@@ -182,6 +213,8 @@ export interface MatchResult {
 
 export interface ClientToServerEvents {
   'net:ping': (payload: NetPingPayload, ack?: AckFn<NetPingResult>) => void;
+  'queue:join': (payload: QueueJoinPayload, ack?: AckFn<QueueJoinResult>) => void;
+  'queue:leave': (payload: Record<string, never>, ack?: AckFn<QueueLeaveResult>) => void;
   'room:create': (payload: RoomCreatePayload, ack?: AckFn<RoomCreateResult>) => void;
   'room:join': (payload: RoomJoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'room:rejoin': (payload: RoomRejoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
@@ -196,6 +229,10 @@ export interface ClientToServerEvents {
 }
 
 export interface ServerToClientEvents {
+  'queue:status': (payload: QueueStatusPayload) => void;
+  'queue:matched': (payload: QueueMatchedPayload) => void;
+  'queue:timeout': (payload: QueueTimeoutPayload) => void;
+
   'room:state': (snapshot: RoomSnapshot) => void;
   'room:player_joined': (payload: { player: PlayerPublic }) => void;
   'room:player_left': (payload: { userId: number; reason: LeaveReason }) => void;

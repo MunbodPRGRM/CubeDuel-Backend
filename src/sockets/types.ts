@@ -141,6 +141,12 @@ export interface RoomCreatePayload {
   cubeType: CubeType;
   kind: 'custom' | 'multiplayer';
   maxPlayers: 2 | 3 | 4;
+  /**
+   * **เครื่อง dev เท่านั้น** (`ALLOW_TEST_COMPETITIVE_ROOM=1`) — ห้องหลายคนที่สร้างด้วยรหัส
+   * เป็นโหมด `custom` เสมอ client จริงไม่ต้องส่งฟิลด์นี้ · มีไว้ให้ `npm run smoke:multi`
+   * บังคับสร้างห้องโหมด `auto` มาทดสอบ Pairwise Elo ก่อนคิวจับคู่จะเสร็จ (เฟส 6 ก้อนที่ 1)
+   */
+  roomMode?: RoomMode;
 }
 export interface RoomCreateResult {
   roomId: number;

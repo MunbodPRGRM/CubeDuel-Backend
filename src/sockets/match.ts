@@ -21,11 +21,15 @@ import {
   PROGRESS_INTERVAL_MS,
 } from '../constants.js';
 import { replaySolve } from '../lib/cube-state.js';
-import { duelEloChanges } from '../lib/elo.js';
+import { duelEloChanges, pairwiseEloChanges } from '../lib/elo.js';
 import { isAllowedMove } from '../lib/moves.js';
 import { assignRanks, findWinnerId } from '../lib/ranking.js';
 import { generateScrambles } from '../services/scramble.service.js';
-import { saveMatch, type MatchPlayerOutcome } from '../services/match.service.js';
+import {
+  saveMatch,
+  saveMultiplayerMatch,
+  type MatchPlayerOutcome,
+} from '../services/match.service.js';
 import type { TypedServer, TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import type { Room, RoomPlayer } from './room.js';
@@ -41,9 +45,15 @@ import {
   type SolveSolvedResult,
 } from './types.js';
 
-/** ห้องที่ปรับ Elo จริง — ห้องสร้างเองไม่ปรับ (CLAUDE.md ข้อ 7) */
+/**
+ * ห้องที่ปรับ Elo จริง (CLAUDE.md ข้อ 7)
+ *   - ห้องแข่งขัน 1v1 → Elo มาตรฐาน
+ *   - ห้องผู้เล่นหลายคน **โหมด auto** → Pairwise Elo
+ *   - ห้องสร้างเอง (ทั้ง 1v1 และหลายคนโหมด custom) → ไม่ปรับ `elo_change` เป็น NULL ทุกคน
+ */
 function isRatedRoom(room: Room): boolean {
-  return room.roomKind === 'competitive';
+  if (room.roomKind === 'competitive') return true;
+  return room.roomKind === 'multiplayer' && room.roomMode === 'auto';
 }
 
 /** ผู้เล่นที่ยังไม่จบ (ยังหมุนอยู่) */
@@ -433,21 +443,33 @@ function toOutcome(
   };
 }
 
-/** Elo 1v1 (K = 32) — ห้องที่ไม่ปรับคะแนนคืน `null` ทั้งคู่ (CLAUDE.md ข้อ 7) */
+/**
+ * Δ Elo ของทุกคนในห้อง — ห้องที่ไม่ปรับคะแนนคืน `null` ทุกคน (CLAUDE.md ข้อ 7)
+ *
+ * 2 คนใช้ Elo มาตรฐาน · 3–4 คนใช้ Pairwise Elo — สูตรและเคสเสมอทั้งหมดอยู่ใน `lib/elo.ts`
+ * (มี unit test คุมอยู่) ที่นี่แค่แปลงห้องให้
+ */
 function eloChanges(room: Room, ranks: Map<number, number>): Map<number, number | null> {
   const players = [...room.players.values()];
-  const [first, second] = players;
-  if (!isRatedRoom(room) || players.length !== 2 || !first || !second) {
-    return new Map(players.map((player) => [player.userId, null]));
-  }
+  const empty = () => new Map<number, number | null>(players.map((p) => [p.userId, null]));
+  if (!isRatedRoom(room) || players.length < 2) return empty();
 
-  // สูตรและเคสเสมอทั้งหมดอยู่ใน `lib/elo.ts` (มี unit test คุมอยู่) — ที่นี่แค่แปลงห้องให้
-  return new Map<number, number | null>(
-    duelEloChanges([
-      { userId: first.userId, eloRating: first.eloRating, rankNo: ranks.get(first.userId)! },
-      { userId: second.userId, eloRating: second.eloRating, rankNo: ranks.get(second.userId)! },
-    ]),
-  );
+  const sides = players.map((player) => ({
+    userId: player.userId,
+    eloRating: player.eloRating,
+    rankNo: ranks.get(player.userId)!,
+  }));
+
+  const [first, second] = sides;
+  if (sides.length === 2 && first && second) {
+    return new Map<number, number | null>(duelEloChanges([first, second]));
+  }
+  return new Map<number, number | null>(pairwiseEloChanges(sides));
+}
+
+/** จำนวนผู้เล่นที่ตาราง `MultiplayerMatch` ยอมรับ (CHECK ใน migration บังคับไว้อีกชั้น) */
+function isMultiplayerSize(count: number): boolean {
+  return count === 3 || count === 4;
 }
 
 /**
@@ -485,27 +507,61 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
   const finishedAtTs = Date.now();
   let matchId: number | null = null;
 
-  // ห้องฝึกซ้อมไม่บันทึก · ห้อง 1v1 (custom/competitive) บันทึกลงตาราง Match
-  if (room.scramble !== null && outcomes.length === 2) {
+  /**
+   * ห้องฝึกซ้อมไม่บันทึกอะไรเลย · ที่เหลือแยกทางตามจำนวนผู้เล่น:
+   *   2 คน → ตาราง `Match` · 3–4 คน → `MultiplayerMatch` + participant
+   * จำนวนอื่น (เช่นห้องหลายคนที่เหลือคนเดียว) ไม่บันทึก แต่ยังส่งผลให้ผู้เล่นเห็น
+   */
+  if (room.scramble !== null) {
     try {
-      matchId = await saveMatch({
-        roomType: isRatedRoom(room) ? 'COMPETITIVE' : 'CUSTOM',
-        cubeType: room.cubeType,
-        scramble: room.scramble,
-        // ห้องแข่งขันไม่มีรหัสห้อง (คอลัมน์นี้มีความหมายเฉพาะห้องสร้างเอง — database-schema.md)
-        roomCode: isRatedRoom(room) ? null : room.roomCode,
-        spectatorCount: room.peakSpectatorCount,
-        startedAtTs: room.serverStartTs ?? finishedAtTs,
-        finishedAtTs,
-        winnerId,
-        players: outcomes,
-      });
-      // ให้ client ที่พลาด `match:finished` ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
-      room.lastMatchId = matchId;
+      let saved = false;
+      if (room.roomKind === 'multiplayer') {
+        if (isMultiplayerSize(outcomes.length)) {
+          const multiplayerMatchId = await saveMultiplayerMatch({
+            roomMode: room.roomMode === 'auto' ? 'AUTO' : 'CUSTOM',
+            cubeType: room.cubeType,
+            scramble: room.scramble,
+            roomCode: room.roomCode,
+            startedAtTs: room.serverStartTs ?? finishedAtTs,
+            finishedAtTs,
+            winnerId,
+            players: outcomes,
+          });
+          /**
+           * ยังไม่ส่งเลขนี้ไปกับ `match:finished` / snapshot — `GET /matches/:matchId`
+           * อ่านได้แค่ตาราง `Match` เลขจึงชนกันได้ (เปิดใช้ในเฟส 6 ก้อนที่ 3)
+           */
+          room.lastMultiplayerMatchId = multiplayerMatchId;
+          saved = true;
+        } else {
+          console.warn(
+            `[socket] ห้อง ${room.roomId} จบด้วยผู้เล่น ${outcomes.length} คน — ไม่เข้าเงื่อนไข MultiplayerMatch จึงไม่บันทึก`,
+          );
+        }
+      } else if (outcomes.length === 2) {
+        matchId = await saveMatch({
+          roomType: isRatedRoom(room) ? 'COMPETITIVE' : 'CUSTOM',
+          cubeType: room.cubeType,
+          scramble: room.scramble,
+          // ห้องแข่งขันไม่มีรหัสห้อง (คอลัมน์นี้มีความหมายเฉพาะห้องสร้างเอง — database-schema.md)
+          roomCode: isRatedRoom(room) ? null : room.roomCode,
+          spectatorCount: room.peakSpectatorCount,
+          startedAtTs: room.serverStartTs ?? finishedAtTs,
+          finishedAtTs,
+          winnerId,
+          players: outcomes,
+        });
+        // ให้ client ที่พลาด `match:finished` ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
+        room.lastMatchId = matchId;
+        saved = true;
+      }
       // Elo ที่ปรับแล้วต้องสะท้อนกลับเข้าห้องด้วย เผื่อเล่นรอบใหม่ในห้องเดิม
-      for (const player of players) {
-        const change = changes.get(player.userId);
-        if (change) player.eloRating += change;
+      // **เฉพาะรอบที่บันทึกจริง** — ไม่งั้นรอบที่ข้ามการบันทึกจะทำให้ค่าในห้องหลุดจาก DB
+      if (saved) {
+        for (const player of players) {
+          const change = changes.get(player.userId);
+          if (change) player.eloRating += change;
+        }
       }
     } catch (error) {
       // บันทึกไม่ได้ก็ยังต้องบอกผลให้ผู้เล่นเห็น ไม่ใช่ค้างจอไว้เฉย ๆ

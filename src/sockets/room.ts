@@ -96,6 +96,12 @@ export class Room {
    * `match:finished` (กด F5 / ผู้ชมเพิ่งเข้า) ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
    */
   lastMatchId: number | null = null;
+  /**
+   * `multiplayer_match_id` ของรอบล่าสุด — เก็บแยกจาก `lastMatchId` เพราะเป็น **คนละตาราง**
+   * และเลขชนกันได้ · ยัง **ไม่ส่งไปกับ snapshot** จนกว่า `GET /matches/:matchId` จะอ่าน
+   * แมตช์หลายคนได้ (เฟส 6 ก้อนที่ 3) ไม่งั้นกด F5 แล้วจะได้ผลของแมตช์ 1v1 ที่เลขบังเอิญตรงกัน
+   */
+  lastMultiplayerMatchId: number | null = null;
 
   /** เรียงตามลำดับที่เข้าห้อง (Map คงลำดับการใส่) */
   readonly players = new Map<number, RoomPlayer>();
@@ -221,6 +227,7 @@ export class Room {
     this.scramble = null;
     // ผลของรอบก่อนยังอยู่ใน DB แต่ไม่ใช่ "ผลของห้องนี้ตอนนี้" แล้ว
     this.lastMatchId = null;
+    this.lastMultiplayerMatchId = null;
     this.phaseEndsAtTs = null;
     this.serverStartTs = null;
     for (const player of this.players.values()) {

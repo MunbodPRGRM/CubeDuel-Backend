@@ -12,6 +12,7 @@
 import { CubeType, PrismaClient, RoomType } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
 import {
+  API,
   check,
   connect,
   emit,
@@ -47,6 +48,23 @@ interface Snapshot {
   roomCode: string | null;
   state: string;
   cubeType: string;
+  matchId: number | null;
+}
+
+/** รูปของ `GET /matches/:matchId` (api-contract.md ข้อ 3) */
+interface MatchDetail {
+  matchId: number;
+  roomType: string;
+  ratingApplied: boolean;
+  players: {
+    userId: number;
+    rankNo: number;
+    solveTime: number | null;
+    result: string;
+    eloBefore: number | null;
+    eloAfter: number | null;
+    eloChange: number | null;
+  }[];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -203,6 +221,36 @@ async function main(): Promise<void> {
     aliceRating?.eloRating === 1016 && bobRating?.eloRating === 984,
     { alice: aliceRating?.eloRating, bob: bobRating?.eloRating },
   );
+
+  // ---- ผลย้อนหลังสำหรับคนที่พลาด `match:finished` (กด F5 หลังรอบจบ — ADR-040 ข้อ 5)
+  const finishedSnapshot = states.filter((snapshot) => snapshot.state === 'FINISHED').at(-1);
+  check('snapshot ตอน FINISHED แนบ matchId มาให้', finishedSnapshot?.matchId === result!.matchId, {
+    snapshot: finishedSnapshot?.matchId,
+    event: result!.matchId,
+  });
+
+  const detailRes = await fetch(`${API}/matches/${result!.matchId!}`);
+  const detailBody = (await detailRes.json()) as { data?: MatchDetail };
+  const detail = detailBody.data;
+  check('GET /matches/:matchId ตอบ 200 พร้อมข้อมูล', detailRes.status === 200 && !!detail, {
+    status: detailRes.status,
+  });
+  check(
+    'ผลย้อนหลังบอก Elo ก่อน → หลัง ตรงกับที่ event ส่งไป',
+    detail?.ratingApplied === true &&
+      detail.players.find((p) => p.userId === alice.userId)?.eloBefore === BASELINE_ELO &&
+      detail.players.find((p) => p.userId === alice.userId)?.eloAfter === BASELINE_ELO + 16 &&
+      detail.players.find((p) => p.userId === bob.userId)?.eloAfter === BASELINE_ELO - 16,
+    detail?.players,
+  );
+  check(
+    'ผลย้อนหลังเรียงตามอันดับ ผู้ชนะอยู่บนสุด',
+    detail?.players[0]?.userId === alice.userId && detail.players[0]?.rankNo === 1,
+    detail?.players.map((p) => ({ userId: p.userId, rankNo: p.rankNo })),
+  );
+
+  const missing = await fetch(`${API}/matches/999999999`);
+  check('ขอแมตช์ที่ไม่มีอยู่ → 404', missing.status === 404, missing.status);
 
   await emit(alice.socket, 'room:leave', {});
   await emit(bob.socket, 'room:leave', {});

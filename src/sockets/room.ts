@@ -5,6 +5,7 @@
  * กติกาที่ยึด: `docs/game-rules.md` ข้อ 9 (ห้องสร้างเอง/ผู้ชม/การโอน host)
  * ตัวตนของผู้เล่นคือ `userId` **ไม่ใช่ socket id** — คนหนึ่งเปิดได้หลายแท็บ (ADR-034 ข้อ 3)
  */
+import { MULTIPLAYER_ROOM_MIN } from '../constants.js';
 import type {
   CubeType,
   PlayerProgress,
@@ -141,6 +142,18 @@ export class Room {
 
   get isFull(): boolean {
     return this.players.size >= this.maxPlayers;
+  }
+
+  /**
+   * ต้องมีผู้เล่นอย่างน้อยเท่านี้จึงจะเริ่มรอบได้
+   *
+   * ห้องที่ **host กดเริ่มเอง** ต้องครบตามจำนวนที่ตั้งไว้ (game-rules.md ข้อ 9)
+   * ส่วนห้องหลายคนจากคิว (`roomMode = 'auto'`) เริ่มด้วยเท่าที่เหลืออยู่ได้ถ้ายังถึงขั้นต่ำ —
+   * คนหลุดตอน `MATCHED` ไม่ควรทำให้ห้อง 4 คนล่มทั้งห้อง (ADR-041 ข้อ 3)
+   */
+  get minPlayersToStart(): number {
+    if (this.roomKind === 'multiplayer' && this.roomMode === 'auto') return MULTIPLAYER_ROOM_MIN;
+    return this.maxPlayers;
   }
 
   get spectatorCount(): number {

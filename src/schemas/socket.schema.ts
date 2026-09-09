@@ -17,51 +17,32 @@ export const netPingSchema = z.object({
 
 export const queueJoinSchema = z.object({
   cubeType: z.enum(CUBE_TYPES),
-  /** คิวห้องผู้เล่นหลายคนเป็นงานเฟส 6 — ปฏิเสธตั้งแต่ชั้น schema (ADR-039 ข้อ 9) */
-  kind: z
-    .enum(['competitive', 'multiplayer'])
-    .default('competitive')
-    .refine((kind) => kind !== 'multiplayer', {
-      message: 'คิวห้องผู้เล่นหลายคนยังไม่เปิด (เฟส 6)',
-    }),
+  /** `competitive` = 1v1 · `multiplayer` = 3–4 คน — คนละช่องคิวกัน (game-rules.md ข้อ 8) */
+  kind: z.enum(['competitive', 'multiplayer']).default('competitive'),
 });
 
 /**
  * `room:create` — จำนวนผู้เล่นที่รับได้ขึ้นกับชนิดห้อง จึงต้องตรวจสองฟิลด์คู่กัน
  *
- * `custom` = ห้องสร้างเอง 1v1 · เปิดใช้จริงแล้ว
- * `competitive` / `multiplayer` = สร้างเองได้เฉพาะตอนเปิดสวิตช์ทดสอบ
- * `ALLOW_TEST_COMPETITIVE_ROOM=1` บนเครื่อง dev (ADR-038) — production ปิดตาย
- * ห้องหลายคนเปิดให้ผู้ใช้จริงในเฟส 6 ก้อนที่ 2 พร้อมคิวและกติกาคนไม่ครบ (ADR-041 ข้อ 3)
- * ตอนนี้เปิดแค่พอให้ `npm run smoke:multi` บังคับสร้างห้อง 3–4 คนมาทดสอบการบันทึกผลได้
+ * `custom` = ห้องสร้างเอง 1v1 (2 คน) · `multiplayer` = ห้องสร้างเอง 3–4 คน — เปิดใช้จริงทั้งคู่
+ * ห้องที่สร้างด้วยรหัสเป็น **โหมด `custom` เสมอ** (ไม่ปรับคะแนน) โหมด `auto` ที่ปรับ Pairwise Elo
+ * มาจากคิวจับคู่เท่านั้น จึงไม่มีฟิลด์ `roomMode` ให้ client ส่งมาแล้ว (ADR-043 ข้อ 5)
+ *
+ * `competitive` สร้างเองไม่ได้ — ห้องแข่งขัน 1v1 เกิดจากคิวเท่านั้น เปิดได้เฉพาะเครื่อง dev
+ * ที่ตั้ง `ALLOW_TEST_COMPETITIVE_ROOM=1` ไว้ใช้กับ `npm run smoke:rated` (ADR-038 ข้อ 5)
  */
 export const roomCreateSchema = z
   .object({
     cubeType: z.enum(CUBE_TYPES),
     kind: z.enum(['custom', 'multiplayer', 'competitive']),
     maxPlayers: z.union([z.literal(2), z.literal(3), z.literal(4)]),
-    /**
-     * **เฉพาะสวิตช์ทดสอบ** — ห้องหลายคนที่สร้างด้วยรหัสคือโหมด `custom` เสมอ โหมด `auto`
-     * มาจากคิวจับคู่เท่านั้น (เฟส 6 ก้อนที่ 2) แต่ `npm run smoke:multi` ต้องทดสอบทาง
-     * ที่ปรับ Pairwise Elo จริงก่อนคิวจะเสร็จ จึงเปิดให้ระบุเองได้บนเครื่อง dev
-     * เหตุผลเดียวกับ `ALLOW_TEST_COMPETITIVE_ROOM` ของห้องแข่งขัน 1v1 (ADR-038 ข้อ 5)
-     */
-    roomMode: z.enum(['auto', 'custom']).optional(),
   })
   .superRefine((value, ctx) => {
-    if (value.kind !== 'custom' && !env.allowTestCompetitiveRoom) {
+    if (value.kind === 'competitive' && !env.allowTestCompetitiveRoom) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['kind'],
-        message: 'ตอนนี้เปิดใช้เฉพาะห้องสร้างเอง 1v1 (ห้องผู้เล่นหลายคนยังไม่เปิด)',
-      });
-      return;
-    }
-    if (value.roomMode !== undefined && !(value.kind === 'multiplayer' && env.allowTestCompetitiveRoom)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['roomMode'],
-        message: 'ระบุ roomMode เองไม่ได้ (โหมด auto มาจากคิวจับคู่เท่านั้น)',
+        message: 'ห้องแข่งขันเกิดจากคิวจับคู่เท่านั้น สร้างเองไม่ได้',
       });
       return;
     }

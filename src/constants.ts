@@ -24,6 +24,17 @@ export const QUEUE_STATUS_INTERVAL_MS = 5_000;
 /** รอคิวเกินเท่านี้ = ยกเลิกคิว แจ้ง `queue:timeout` (game-rules.md ข้อ 8) */
 export const QUEUE_TIMEOUT_MS = 180_000;
 
+/**
+ * ขนาดของห้องผู้เล่นหลายคน (game-rules.md ข้อ 8 + 9)
+ *   - ครบ `MULTIPLAYER_ROOM_MAX` คนในคิว = จับกลุ่มทันที
+ *   - รอเกิน `MULTIPLAYER_SHORT_GROUP_AFTER_MS` แล้วมีอย่างน้อย `MULTIPLAYER_ROOM_MIN` คน = เริ่มด้วยเท่าที่มี
+ *   - เหลือต่ำกว่า `MULTIPLAYER_ROOM_MIN` ก่อนจับเวลา = ห้องล่ม (ADR-041 ข้อ 3)
+ * ตัวเลขชุดนี้ผูกกับ CHECK `player_count IN (3, 4)` ของตาราง `MultiplayerMatch` ด้วย
+ */
+export const MULTIPLAYER_ROOM_MIN = 3;
+export const MULTIPLAYER_ROOM_MAX = 4;
+export const MULTIPLAYER_SHORT_GROUP_AFTER_MS = 60_000;
+
 /** หลุดการเชื่อมต่อแล้วมีเวลากลับมาเท่านี้ (game-rules.md ข้อ 6) */
 export const DISCONNECT_GRACE_MS = 30_000;
 

@@ -4,7 +4,14 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { eloWindowFor, pairUp, withinEloWindow, type QueueCandidate } from './matchmaking.js';
+import {
+  eloWindowFor,
+  groupUp,
+  pairUp,
+  withinEloWindow,
+  type QueueCandidate,
+  type QueueWaiter,
+} from './matchmaking.js';
 
 const NOW = 1_700_000_000_000;
 
@@ -152,5 +159,74 @@ describe('pairUp', () => {
     assert.equal(pairs.length, 1);
     const matched = pairs.flatMap((pair) => [pair.a.userId, pair.b.userId]);
     assert.equal(new Set(matched).size, 2);
+  });
+});
+
+describe('groupUp — จับกลุ่มห้องผู้เล่นหลายคน (game-rules.md ข้อ 8)', () => {
+  /** คนในคิวหลายคนหนึ่งคน — สนใจแค่ว่าเข้าคิวมาแล้วกี่มิลลิวินาที */
+  function w(userId: number, waitedMs = 0): QueueWaiter {
+    return { userId, queuedAtTs: NOW - waitedMs };
+  }
+  const ids = (groups: QueueWaiter[][]) => groups.map((group) => group.map((x) => x.userId));
+
+  it('ยังไม่ถึง 3 คน = ไม่จับกลุ่ม ไม่ว่าจะรอนานแค่ไหน', () => {
+    assert.deepEqual(groupUp([w(1, 300_000), w(2, 300_000)], NOW), []);
+  });
+
+  it('ครบ 4 คนจับทันที ไม่ต้องรอ', () => {
+    assert.deepEqual(ids(groupUp([w(1), w(2), w(3), w(4)], NOW)), [[1, 2, 3, 4]]);
+  });
+
+  it('มี 3 คนแต่ยังรอไม่ถึง 60 วินาที = ยังไม่จับ (รอคนที่ 4 ก่อน)', () => {
+    assert.deepEqual(groupUp([w(1, 59_999), w(2, 30_000), w(3, 0)], NOW), []);
+  });
+
+  it('คนหัวคิวรอครบ 60 วินาทีแล้วมี 3 คน = เริ่มด้วย 3 คน', () => {
+    assert.deepEqual(ids(groupUp([w(1, 60_000), w(2, 30_000), w(3, 0)], NOW)), [[1, 2, 3]]);
+  });
+
+  it('นับ 60 วินาทีจากคนที่รอนานที่สุด ไม่ใช่คนที่เพิ่งเข้ามา', () => {
+    // คนที่ 1 รอครบแล้ว ที่เหลือเพิ่งเข้า — ยังต้องได้กลุ่ม
+    assert.equal(groupUp([w(1, 120_000), w(2, 1_000), w(3, 500)], NOW).length, 1);
+    // ไม่มีใครรอครบเลย — ยังไม่ได้กลุ่ม
+    assert.equal(groupUp([w(1, 10_000), w(2, 1_000), w(3, 500)], NOW).length, 0);
+  });
+
+  it('เรียงตามลำดับเข้าคิว — คนที่รอนานกว่าได้เข้ากลุ่มก่อนเสมอ', () => {
+    const groups = groupUp([w(4, 1_000), w(1, 90_000), w(3, 5_000), w(2, 20_000)], NOW);
+    assert.deepEqual(ids(groups), [[1, 2, 3, 4]]);
+  });
+
+  it('มี 6 คน = ได้ห้อง 4 คนหนึ่งห้อง อีก 2 คนรอต่อ (ครบ 4 เริ่มทันทีมาก่อน — ADR-043 ข้อ 2)', () => {
+    const groups = groupUp([w(1, 90_000), w(2, 80_000), w(3, 70_000), w(4, 60_000), w(5), w(6)], NOW);
+    assert.deepEqual(ids(groups), [[1, 2, 3, 4]]);
+  });
+
+  it('มี 7 คนที่รอครบ 60 วิ = ได้ห้อง 4 คนแล้วตามด้วยห้อง 3 คน', () => {
+    const entries = [1, 2, 3, 4, 5, 6, 7].map((id) => w(id, 90_000 - id * 1_000));
+    assert.deepEqual(ids(groupUp(entries, NOW)), [
+      [1, 2, 3, 4],
+      [5, 6, 7],
+    ]);
+  });
+
+  it('มี 8 คน = ได้สองห้องเต็มโดยไม่ต้องรอ', () => {
+    const entries = [1, 2, 3, 4, 5, 6, 7, 8].map((id) => w(id, 8_000 - id));
+    assert.deepEqual(ids(groupUp(entries, NOW)), [
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+    ]);
+  });
+
+  it('เข้าคิวพร้อมกันเป๊ะ = ตัดสินด้วย userId ให้ผลคงที่ทุกครั้ง', () => {
+    const entries = [w(9), w(2), w(7), w(4)];
+    assert.deepEqual(ids(groupUp(entries, NOW)), [[2, 4, 7, 9]]);
+    assert.deepEqual(ids(groupUp([...entries].reverse(), NOW)), [[2, 4, 7, 9]]);
+  });
+
+  it('ไม่มีใครถูกจับซ้ำสองกลุ่ม', () => {
+    const entries = [1, 2, 3, 4, 5, 6, 7].map((id) => w(id, 90_000 - id * 1_000));
+    const picked = groupUp(entries, NOW).flat().map((x) => x.userId);
+    assert.equal(new Set(picked).size, picked.length);
   });
 });

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { authRouter } from './auth.routes.js';
 import { usersRouter } from './users.routes.js';
+import { matchesRouter } from './matches.routes.js';
 import { leaderboardRouter } from './leaderboard.routes.js';
 import { scrambleRouter } from './scramble.routes.js';
 
@@ -24,6 +25,7 @@ router.get('/health', async (_req, res) => {
 
 router.use('/auth', authRouter);
 router.use('/users', usersRouter);
+router.use('/matches', matchesRouter);
 router.use('/leaderboard', leaderboardRouter);
 router.use('/scramble', scrambleRouter);
 

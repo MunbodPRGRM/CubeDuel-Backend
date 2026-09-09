@@ -500,6 +500,8 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
         winnerId,
         players: outcomes,
       });
+      // ให้ client ที่พลาด `match:finished` ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
+      room.lastMatchId = matchId;
       // Elo ที่ปรับแล้วต้องสะท้อนกลับเข้าห้องด้วย เผื่อเล่นรอบใหม่ในห้องเดิม
       for (const player of players) {
         const change = changes.get(player.userId);

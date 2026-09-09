@@ -21,8 +21,9 @@ import {
   type RatedMatchRow,
   type SolveSample,
 } from '../lib/anti-cheat.js';
-import { toDbSeconds } from '../lib/ranking.js';
-import { CUBE_TYPE_TO_PRISMA, type ApiCubeType } from '../types/cube.js';
+import { errors } from '../lib/errors.js';
+import { assignRanks, toDbSeconds } from '../lib/ranking.js';
+import { CUBE_TYPE_TO_PRISMA, PRISMA_TO_CUBE_TYPE, type ApiCubeType } from '../types/cube.js';
 import type { SolveStatus } from '../sockets/types.js';
 
 export interface MatchPlayerOutcome {
@@ -227,4 +228,123 @@ export async function saveMatch(outcome: MatchOutcome): Promise<number> {
 
     return match.matchId;
   });
+}
+
+// ---------------------------------------------------------------- อ่านผลย้อนหลัง
+
+/** รูปเดียวกับ `MatchResultEntry` ของ `match:finished` — หน้าจอเดียวกันใช้ได้ทั้งสองทาง */
+export interface MatchDetailPlayer {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** 1 = `player1_id` — ลำดับที่เข้าคิว/สร้างห้อง (database-schema.md) */
+  seatNo: 1 | 2;
+  rankNo: number;
+  /** วินาที — null = DNF/ยอมแพ้ (ดู `result` ควบคู่) */
+  solveTime: number | null;
+  result: SolveStatus;
+  moveCount: number;
+  /** null ทั้งสามช่องในห้องที่ไม่ปรับคะแนน */
+  eloBefore: number | null;
+  eloAfter: number | null;
+  eloChange: number | null;
+}
+
+export interface MatchDetail {
+  matchId: number;
+  roomType: 'competitive' | 'custom';
+  cubeType: ApiCubeType;
+  scramble: string;
+  roomCode: string | null;
+  winnerId: number | null;
+  spectatorCount: number;
+  startedAt: string;
+  finishedAt: string | null;
+  ratingApplied: boolean;
+  /** เรียงตาม `rankNo` แล้ว (ผู้ชนะอยู่บนสุด) */
+  players: MatchDetailPlayer[];
+}
+
+const STATUS_OF: Record<SolveResult, SolveStatus> = {
+  [SolveResult.SOLVED]: 'solved',
+  [SolveResult.DNF]: 'dnf',
+  [SolveResult.SURRENDERED]: 'surrendered',
+};
+
+/**
+ * ผลของแมตช์ 1v1 หนึ่งแมตช์ (api-contract.md ข้อ 3)
+ *
+ * ใช้ตอน client **ไม่ได้รับ `match:finished`** — กด F5 หลังรอบจบ หรือผู้ชมเพิ่งเข้าห้องที่จบแล้ว
+ * `rankNo` ไม่ได้เก็บใน DB จึงคำนวณใหม่จากเวลาด้วย `assignRanks` ตัวเดียวกับตอนจบแมตช์จริง
+ */
+export async function getMatchDetail(matchId: number): Promise<MatchDetail> {
+  const match = await prisma.match.findUnique({
+    where: { matchId },
+    include: {
+      player1: { select: { userId: true, username: true, nickname: true } },
+      player2: { select: { userId: true, username: true, nickname: true } },
+    },
+  });
+  if (!match) throw errors.notFound('ไม่พบแมตช์นี้');
+
+  const sides = [
+    {
+      user: match.player1,
+      seatNo: 1 as const,
+      time: match.player1Time,
+      result: match.player1Result,
+      moveCount: match.player1MoveCount,
+      eloBefore: match.player1EloBefore,
+      eloChange: match.player1EloChange,
+    },
+    {
+      user: match.player2,
+      seatNo: 2 as const,
+      time: match.player2Time,
+      result: match.player2Result,
+      moveCount: match.player2MoveCount,
+      eloBefore: match.player2EloBefore,
+      eloChange: match.player2EloChange,
+    },
+  ];
+
+  const ranks = assignRanks(
+    sides.map((side) => ({
+      userId: side.user.userId,
+      status: STATUS_OF[side.result],
+      // assignRanks คิดเป็นมิลลิวินาที ส่วน DB เก็บวินาทีทศนิยม 2 ตำแหน่ง
+      solveTimeMs: side.time === null ? null : Math.round(side.time.toNumber() * 1000),
+    })),
+  );
+
+  const players: MatchDetailPlayer[] = sides
+    .map((side) => ({
+      userId: side.user.userId,
+      username: side.user.username,
+      nickname: side.user.nickname,
+      seatNo: side.seatNo,
+      rankNo: ranks.get(side.user.userId) ?? 1,
+      solveTime: side.time === null ? null : side.time.toNumber(),
+      result: STATUS_OF[side.result],
+      moveCount: side.moveCount ?? 0,
+      eloBefore: side.eloChange === null ? null : side.eloBefore,
+      eloAfter:
+        side.eloChange === null || side.eloBefore === null ? null : side.eloBefore + side.eloChange,
+      eloChange: side.eloChange,
+    }))
+    .sort((a, b) => a.rankNo - b.rankNo);
+
+  return {
+    matchId: match.matchId,
+    roomType: match.roomType === RoomType.COMPETITIVE ? 'competitive' : 'custom',
+    cubeType: PRISMA_TO_CUBE_TYPE[match.cubeType],
+    scramble: match.scramble,
+    roomCode: match.roomCode,
+    winnerId: match.winnerId,
+    spectatorCount: match.spectatorCount,
+    startedAt: match.startedAt.toISOString(),
+    finishedAt: match.finishedAt?.toISOString() ?? null,
+    ratingApplied: match.roomType === RoomType.COMPETITIVE,
+    players,
+  };
 }

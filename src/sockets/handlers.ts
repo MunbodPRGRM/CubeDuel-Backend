@@ -67,6 +67,9 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
   // ---------------------------------------------------------------- ห้อง
 
   on(socket, 'room:create', roomCreateSchema, async (socket, payload) => {
+    // อยู่ในห้องพร้อมกับอยู่ในคิวไม่ได้ (socket-events.md ข้อ 4) — ทางกลับของ `joinQueue()`
+    // ที่พาออกจากห้องให้เอง · ถ้าไม่ล้างตรงนี้ คิวจะดึงคนที่อยู่ในห้องอื่นออกไปกลางคัน
+    leaveQueue(socket.data.userId);
     leavePreviousRoom(io, socket);
     const room = createRoom({
       // `competitive` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038)
@@ -86,6 +89,7 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     const room = getRoomByCode(payload.roomCode);
     if (!room) throw socketErrors.roomNotFound();
 
+    leaveQueue(socket.data.userId);
     leavePreviousRoom(io, socket, room.roomId);
     if (payload.as === 'spectator') await joinAsSpectator(io, socket, room);
     else await joinAsPlayer(io, socket, room);

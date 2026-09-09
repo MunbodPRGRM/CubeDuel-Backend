@@ -91,6 +91,11 @@ export class Room {
   lastActivityTs = Date.now();
   /** จำนวนผู้ชมสูงสุดที่เคยมี — บันทึกลง `Match.spectator_count` ตอนจบ */
   peakSpectatorCount = 0;
+  /**
+   * `match_id` ของรอบล่าสุดที่บันทึกสำเร็จ — ส่งไปกับ snapshot เพื่อให้ client ที่พลาด
+   * `match:finished` (กด F5 / ผู้ชมเพิ่งเข้า) ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
+   */
+  lastMatchId: number | null = null;
 
   /** เรียงตามลำดับที่เข้าห้อง (Map คงลำดับการใส่) */
   readonly players = new Map<number, RoomPlayer>();
@@ -214,6 +219,8 @@ export class Room {
   resetForNewRound(): void {
     this.clearTimers();
     this.scramble = null;
+    // ผลของรอบก่อนยังอยู่ใน DB แต่ไม่ใช่ "ผลของห้องนี้ตอนนี้" แล้ว
+    this.lastMatchId = null;
     this.phaseEndsAtTs = null;
     this.serverStartTs = null;
     for (const player of this.players.values()) {
@@ -285,6 +292,7 @@ export class Room {
       serverTs: Date.now(),
       phaseEndsAtTs: this.phaseEndsAtTs,
       serverStartTs: this.serverStartTs,
+      matchId: this.lastMatchId,
     };
   }
 }

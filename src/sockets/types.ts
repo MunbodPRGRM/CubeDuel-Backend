@@ -75,6 +75,11 @@ export interface RoomSnapshot {
   phaseEndsAtTs: number | null;
   /** เวลาที่เริ่มจับเวลา — มีค่าตั้งแต่ SOLVING */
   serverStartTs: number | null;
+  /**
+   * แถว `Match` ของรอบล่าสุดในห้องนี้ — `null` จนกว่ารอบแรกจะจบและบันทึกสำเร็จ
+   * ใช้เปิดผลย้อนหลังด้วย `GET /matches/:matchId` ตอนไม่ได้รับ `match:finished` (ADR-040 ข้อ 5)
+   */
+  matchId: number | null;
 }
 
 // ---------------------------------------------------------------- ack

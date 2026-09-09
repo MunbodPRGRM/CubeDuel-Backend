@@ -72,10 +72,12 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     leaveQueue(socket.data.userId);
     leavePreviousRoom(io, socket);
     const room = createRoom({
-      // `competitive` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038)
-      roomKind: payload.kind === 'competitive' ? 'competitive' : 'custom',
+      // `competitive` / `multiplayer` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038)
+      roomKind: payload.kind,
       // roomMode มีความหมายเฉพาะห้องผู้เล่นหลายคน — ห้อง 1v1 เป็น null เสมอ
-      roomMode: null,
+      // ห้องที่สร้างด้วยรหัสคือโหมด custom เสมอ (โหมด auto มาจากคิวเท่านั้น — เฟส 6 ก้อนที่ 2)
+      // `payload.roomMode` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบ ไว้ให้ smoke:multi ใช้
+      roomMode: payload.kind === 'multiplayer' ? (payload.roomMode ?? 'custom') : null,
       cubeType: payload.cubeType,
       maxPlayers: payload.maxPlayers,
       // ห้องแข่งขันจริงไม่มีรหัส แต่ห้องทดสอบต้องมี ไม่งั้นอีกฝั่งเข้าไม่ได้

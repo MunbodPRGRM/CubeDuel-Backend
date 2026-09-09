@@ -99,6 +99,7 @@ export async function sendMoves(socket: Socket, moves: string[], gapMs = 0): Pro
 /** ผลแมตช์ที่ `match:finished` ส่งกลับมา (เท่าที่สโมคเทสใช้) */
 export interface SmokeMatchResult {
   matchId: number | null;
+  roomKind: 'competitive' | 'multiplayer' | 'custom';
   ratingApplied: boolean;
   scramble: string;
   results: {
@@ -114,12 +115,14 @@ export interface SmokeMatchResult {
 }
 
 /**
- * เล่นหนึ่งรอบในห้องที่มีคนครบแล้ว: host กดเริ่ม → ทั้งคู่แจ้งพร้อม → รอเริ่มจับเวลา
+ * เล่นหนึ่งรอบในห้องที่มีคนครบแล้ว: host กดเริ่ม → ทุกคนแจ้งพร้อม → รอเริ่มจับเวลา
  * คืน scramble ของรอบนั้นไว้ให้ผู้เรียกสั่ง move ต่อ
+ *
+ * รับผู้เล่นกี่คนก็ได้ (ห้อง 1v1 ส่งมา 2 · ห้องหลายคนส่งมา 3–4)
  */
 export async function startRound(
   hostSocket: Socket,
-  otherSocket: Socket,
+  ...otherSockets: Socket[]
 ): Promise<{ scramble: string }> {
   // ต้องดัก match:loading ก่อนสั่งเริ่ม — server ส่ง event ออกก่อนที่ ack จะกลับมาถึง
   const loading = waitFor<{ scramble: string }>(hostSocket, 'match:loading');
@@ -130,8 +133,7 @@ export async function startRound(
   const payload = await loading;
   if (!payload) throw new Error('ไม่ได้รับ match:loading');
 
-  await emit(hostSocket, 'solve:ready', {});
-  await emit(otherSocket, 'solve:ready', {});
+  for (const socket of [hostSocket, ...otherSockets]) await emit(socket, 'solve:ready', {});
   await waitFor(hostSocket, 'match:started');
   return { scramble: payload.scramble };
 }

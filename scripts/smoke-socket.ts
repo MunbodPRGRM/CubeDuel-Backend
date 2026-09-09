@@ -134,15 +134,42 @@ async function main(): Promise<void> {
 
   // ---------------------------------------------------------------- สร้าง/เข้าห้อง
   console.log('\nroom:create / room:join');
-  const badKind = await emit(alice, 'room:create', {
+  /**
+   * ชนิดห้องกับจำนวนคนต้องเข้าคู่กัน — ตรวจสองฟิลด์พร้อมกัน (เฟส 6 ก้อนที่ 1)
+   * เช็คแค่คู่ที่ผิดเสมอ ไม่ว่าสวิตช์ทดสอบ `ALLOW_TEST_COMPETITIVE_ROOM` จะเปิดหรือปิด
+   */
+  const badSize = await emit(alice, 'room:create', {
     cubeType: '3x3x3',
-    kind: 'multiplayer',
+    kind: 'custom',
     maxPlayers: 4,
   });
   check(
-    'ห้องหลายคนยังไม่เปิด → E_VALIDATION',
-    !badKind.ok && badKind.error.code === 'E_VALIDATION',
-    badKind,
+    'ห้องสร้างเอง 1v1 ขอ 4 คน → E_VALIDATION',
+    !badSize.ok && badSize.error.code === 'E_VALIDATION',
+    badSize,
+  );
+
+  const badMultiSize = await emit(alice, 'room:create', {
+    cubeType: '3x3x3',
+    kind: 'multiplayer',
+    maxPlayers: 2,
+  });
+  check(
+    'ห้องผู้เล่นหลายคนขอ 2 คน → E_VALIDATION',
+    !badMultiSize.ok && badMultiSize.error.code === 'E_VALIDATION',
+    badMultiSize,
+  );
+
+  const badRoomMode = await emit(alice, 'room:create', {
+    cubeType: '3x3x3',
+    kind: 'custom',
+    maxPlayers: 2,
+    roomMode: 'auto',
+  });
+  check(
+    'ระบุ roomMode เองในห้อง 1v1 ไม่ได้ (โหมด auto มาจากคิวเท่านั้น) → E_VALIDATION',
+    !badRoomMode.ok && badRoomMode.error.code === 'E_VALIDATION',
+    badRoomMode,
   );
 
   const created = await emit<{ roomId: number; roomCode: string }>(alice, 'room:create', {

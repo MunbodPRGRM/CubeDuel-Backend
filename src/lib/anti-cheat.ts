@@ -27,6 +27,15 @@ const TPS_WINDOW_MS = (TPS_WINDOW_MOVES / TPS_LIMIT) * 1_000;
 const MIN_GAP_MS = 20;
 const MAX_TIGHT_GAPS = 5;
 
+/** ชนะติดกัน **เกิน** เท่านี้แมตช์ (ห้องแข่งขันเท่านั้น) ถือว่าผิดปกติ */
+const WIN_STREAK_LIMIT = 20;
+
+/** ...โดยที่ทุกแมตช์ในสตรีค Elo ต่างจากคู่แข่ง **เกิน** เท่านี้ */
+const WIN_STREAK_ELO_GAP = 300;
+
+/** จำนวนแมตช์ย้อนหลังที่ต้องอ่านถึงจะตัดสิน `WIN_STREAK` ได้ — มากกว่านี้ไม่ได้ใช้ */
+export const WIN_STREAK_LOOKBACK = WIN_STREAK_LIMIT + 1;
+
 export interface SolveSample {
   cubeType: ApiCubeType;
   /** เวลาที่ใช้จริงหน่วยมิลลิวินาที (ผลที่ผ่านการตรวจแล้ว) */
@@ -117,10 +126,9 @@ function checkMoveGap(sample: SolveSample): SoftFlag | null {
 }
 
 /**
- * ตรวจ solve หนึ่งครั้งกับเกณฑ์ soft ทั้งหมดที่ทำได้ตอนนี้
+ * ตรวจ solve หนึ่งครั้งกับเกณฑ์ soft ที่คิดจบได้ในตัวเอง
  *
- * `WIN_STREAK` ไม่อยู่ที่นี่ — ต้องอ่านประวัติแมตช์ย้อนหลังและมีความหมายเฉพาะห้องที่ปรับคะแนน
- * จึงยกไปทำพร้อมห้องแข่งขันในเฟส 5 (ADR-035 ข้อ 7)
+ * `WIN_STREAK` แยกไปอยู่ที่ `checkWinStreak()` เพราะต้องอ่านประวัติแมตช์ย้อนหลัง
  */
 export function inspectSolve(sample: SolveSample): SoftFlag[] {
   return [
@@ -129,4 +137,53 @@ export function inspectSolve(sample: SolveSample): SoftFlag[] {
     checkHighTps(sample),
     checkMoveGap(sample),
   ].filter((flag): flag is SoftFlag => flag !== null);
+}
+
+// ---------------------------------------------------------------- WIN_STREAK
+
+/**
+ * แมตช์ห้องแข่งขันหนึ่งแถวที่มองจากมุมของผู้เล่นคนหนึ่ง — ผู้เรียกเป็นคนสลับข้างให้แล้ว
+ * `null` ในช่อง Elo = แมตช์ที่ไม่ได้ปรับคะแนน (ไม่ควรหลุดเข้ามา แต่กันไว้ = ตัดสตรีค)
+ */
+export interface RatedMatchRow {
+  matchId: number;
+  winnerId: number | null;
+  selfEloBefore: number | null;
+  opponentEloBefore: number | null;
+}
+
+/**
+ * ชนะรวดผิดปกติ — "ชนะติดกันเกิน 20 แมตช์โดย Elo ต่างจากคู่แข่งเกิน 300" (game-rules.md ข้อ 10)
+ *
+ * นับจากแมตช์ล่าสุดย้อนกลับไป **สตรีคขาดทันทีที่เจอแมตช์ที่ไม่เข้าเงื่อนไข** ไม่ว่าจะเพราะ
+ * ไม่ได้ชนะ หรือชนะคู่แข่งที่ฝีมือใกล้เคียง (Elo ต่างไม่ถึง 300) — ตีความตามตัวหนังสือของกติกา
+ * ว่า "20 แมตช์ที่ชนะติดกันนั้นเป็นการชนะคนที่ห่างชั้น" ไม่ใช่ชนะใครก็ได้ 20 แมตช์ (ADR-038 ข้อ 4)
+ *
+ * `recentMatches` ต้องเรียง **ใหม่ → เก่า** และมีอย่างน้อย `WIN_STREAK_LOOKBACK` แถว
+ * (แถวแรกคือแมตช์ที่เพิ่งจบ) — ผู้เรียกอ่านมาเกินนี้ก็ไม่ได้ใช้
+ */
+export function checkWinStreak(
+  userId: number,
+  recentMatches: readonly RatedMatchRow[],
+  cubeType: ApiCubeType,
+): SoftFlag | null {
+  let streak = 0;
+  for (const match of recentMatches.slice(0, WIN_STREAK_LOOKBACK)) {
+    if (match.winnerId !== userId) break;
+    if (match.selfEloBefore === null || match.opponentEloBefore === null) break;
+    if (Math.abs(match.selfEloBefore - match.opponentEloBefore) <= WIN_STREAK_ELO_GAP) break;
+    streak++;
+  }
+
+  if (streak <= WIN_STREAK_LIMIT) return null;
+  return {
+    reason: FlagReason.WIN_STREAK,
+    detail: {
+      metric: 'consecutive_wins_over_elo_gap',
+      measured: streak,
+      threshold: WIN_STREAK_LIMIT,
+      eloGapThreshold: WIN_STREAK_ELO_GAP,
+      cubeType,
+    },
+  };
 }

@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "//": "build ไม่เอา unit test ติดไปด้วย — เทสรันจากซอร์สด้วย tsx (npm test)",
+  "exclude": ["src/**/*.test.ts"]
+}

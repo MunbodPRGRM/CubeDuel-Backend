@@ -6,9 +6,22 @@
  *
  * ไฟล์นี้ไม่รู้จัก Socket.IO เลย — ชั้น socket เป็นคนแปลงห้องเป็น `MatchOutcome` ให้
  */
-import { Prisma, RoomType, SolveResult } from '@prisma/client';
+import {
+  Prisma,
+  RoomType,
+  SolveResult,
+  type CubeType as PrismaCubeType,
+  type FlagReason,
+} from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { inspectSolve, type SolveSample } from '../lib/anti-cheat.js';
+import {
+  checkWinStreak,
+  inspectSolve,
+  WIN_STREAK_LOOKBACK,
+  type RatedMatchRow,
+  type SolveSample,
+} from '../lib/anti-cheat.js';
+import { toDbSeconds } from '../lib/ranking.js';
 import { CUBE_TYPE_TO_PRISMA, type ApiCubeType } from '../types/cube.js';
 import type { SolveStatus } from '../sockets/types.js';
 
@@ -52,63 +65,6 @@ const RESULT_OF: Record<SolveStatus, SolveResult> = {
   solving: SolveResult.DNF,
 };
 
-/**
- * มิลลิวินาที → วินาทีทศนิยม 2 ตำแหน่งแบบ **ปัดลง** (game-rules.md ข้อ 3)
- * ปัดลงตามธรรมเนียม speedcubing — 12.349 วิ ต้องเป็น 12.34 ไม่ใช่ 12.35
- */
-export function toDbSeconds(ms: number): number {
-  return Math.floor(ms / 10) / 100;
-}
-
-/** เวลาที่ใช้เทียบกันตอนจัดอันดับ = ค่าที่จะลง DB จริง ไม่ใช่ค่ามิลลิวินาทีดิบ */
-function comparableTime(player: {
-  status: SolveStatus;
-  solveTimeMs: number | null;
-}): number | null {
-  if (player.status !== 'solved' || player.solveTimeMs === null) return null;
-  return toDbSeconds(player.solveTimeMs);
-}
-
-/**
- * จัดอันดับตาม `game-rules.md` ข้อ 7 — คืน `Map<userId, rankNo>`
- *
- * เร็วกว่าได้อันดับดีกว่า · เวลาเท่ากันเป๊ะได้อันดับเท่ากันแล้วอันดับถัดไปข้าม (1, 1, 3, 4)
- * · DNF ทุกคนอยู่ท้ายสุดและได้อันดับเท่ากันหมด = (จำนวนคนที่แก้สำเร็จ) + 1
- */
-export function assignRanks<
-  T extends { userId: number; status: SolveStatus; solveTimeMs: number | null },
->(players: readonly T[]): Map<number, number> {
-  const solved = players
-    .map((player) => ({ userId: player.userId, time: comparableTime(player) }))
-    .filter((entry): entry is { userId: number; time: number } => entry.time !== null)
-    .sort((a, b) => a.time - b.time);
-
-  const ranks = new Map<number, number>();
-  let previousTime: number | null = null;
-  let previousRank = 0;
-
-  solved.forEach((entry, index) => {
-    const rank = previousTime !== null && entry.time === previousTime ? previousRank : index + 1;
-    ranks.set(entry.userId, rank);
-    previousTime = entry.time;
-    previousRank = rank;
-  });
-
-  const dnfRank = solved.length + 1;
-  for (const player of players) {
-    if (!ranks.has(player.userId)) ranks.set(player.userId, dnfRank);
-  }
-  return ranks;
-}
-
-/** เสมอ = ไม่มีใครได้อันดับ 1 คนเดียว (เวลาเท่ากัน หรือ DNF ทั้งคู่ — ADR-007) */
-export function findWinnerId(
-  players: readonly { userId: number; rankNo: number; status: SolveStatus }[],
-): number | null {
-  const firstPlace = players.filter((player) => player.rankNo === 1 && player.status === 'solved');
-  return firstPlace.length === 1 ? firstPlace[0]!.userId : null;
-}
-
 function sideData(player: MatchPlayerOutcome) {
   const solved = player.status === 'solved' && player.solveTimeMs !== null;
   return {
@@ -117,6 +73,73 @@ function sideData(player: MatchPlayerOutcome) {
     time: solved ? new Prisma.Decimal(toDbSeconds(player.solveTimeMs!)) : null,
     moveCount: player.moveCount,
   };
+}
+
+/** ตัวเขียน `MatchFlag` ตัวเดียวของไฟล์นี้ — ทุก flag ต้องผ่านทางนี้ (จะได้เก็บ move_log เหมือนกัน) */
+async function writeFlag(
+  tx: Prisma.TransactionClient,
+  matchId: number,
+  player: MatchPlayerOutcome,
+  flag: { reason: FlagReason; detail: Record<string, unknown> },
+): Promise<void> {
+  await tx.matchFlag.create({
+    data: {
+      matchId,
+      userId: player.userId,
+      flagReason: flag.reason,
+      detail: flag.detail as Prisma.InputJsonValue,
+      // เก็บ move stream เฉพาะแมตช์ที่ถูก flag เท่านั้น (job ล้างเป็น NULL หลัง 90 วัน)
+      moveLog: player.moveLog as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * ตรวจเกณฑ์ "ชนะรวดผิดปกติ" ของผู้ชนะ — **ต้องอยู่ในทรานแซกชันเดียวกับที่เพิ่งเขียน `Match`**
+ * เพราะแมตช์ที่เพิ่งจบต้องนับเป็นแมตช์แรกของสตรีคด้วย
+ *
+ * ดูเฉพาะห้องแข่งขันของ `cube_type` เดียวกัน — Elo แยกตามประเภท สตรีคจึงต้องแยกตามประเภทด้วย
+ */
+async function flagWinStreak(
+  tx: Prisma.TransactionClient,
+  matchId: number,
+  outcome: MatchOutcome,
+  cubeType: PrismaCubeType,
+): Promise<void> {
+  const winnerId = outcome.winnerId;
+  if (outcome.roomType !== RoomType.COMPETITIVE || winnerId === null) return;
+  const winner = outcome.players.find((player) => player.userId === winnerId);
+  if (!winner) return;
+
+  const recent = await tx.match.findMany({
+    where: {
+      roomType: RoomType.COMPETITIVE,
+      cubeType,
+      OR: [{ player1Id: winnerId }, { player2Id: winnerId }],
+    },
+    orderBy: { matchId: 'desc' },
+    take: WIN_STREAK_LOOKBACK,
+    select: {
+      matchId: true,
+      winnerId: true,
+      player1Id: true,
+      player1EloBefore: true,
+      player2EloBefore: true,
+    },
+  });
+
+  const rows: RatedMatchRow[] = recent.map((row) => {
+    const selfIsPlayer1 = row.player1Id === winnerId;
+    return {
+      matchId: row.matchId,
+      winnerId: row.winnerId,
+      selfEloBefore: selfIsPlayer1 ? row.player1EloBefore : row.player2EloBefore,
+      opponentEloBefore: selfIsPlayer1 ? row.player2EloBefore : row.player1EloBefore,
+    };
+  });
+
+  const flag = checkWinStreak(winnerId, rows, outcome.cubeType);
+  if (flag) await writeFlag(tx, matchId, winner, flag);
 }
 
 /**
@@ -196,18 +219,11 @@ export async function saveMatch(outcome: MatchOutcome): Promise<number> {
         moveTimestampsMs: player.moveTimestampsMs,
       };
       for (const flag of inspectSolve(sample)) {
-        await tx.matchFlag.create({
-          data: {
-            matchId: match.matchId,
-            userId: player.userId,
-            flagReason: flag.reason,
-            detail: flag.detail as Prisma.InputJsonValue,
-            // เก็บ move stream เฉพาะแมตช์ที่ถูก flag เท่านั้น (job ล้างเป็น NULL หลัง 90 วัน)
-            moveLog: player.moveLog as unknown as Prisma.InputJsonValue,
-          },
-        });
+        await writeFlag(tx, match.matchId, player, flag);
       }
     }
+
+    await flagWinStreak(tx, match.matchId, outcome, cubeType);
 
     return match.matchId;
   });

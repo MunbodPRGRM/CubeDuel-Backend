@@ -64,6 +64,8 @@ curl http://localhost:4000/api/v1/health
 | `npm run dev` | รัน dev server พร้อม watch (`tsx watch`) |
 | `npm run build` | คอมไพล์ TypeScript ลง `dist/` |
 | `npm start` | รันไฟล์ที่ build แล้ว |
+| `npm test` | unit test ของตรรกะการตัดสิน (`node:test` + `tsx` — ไม่ต้องมี DB/server) |
+| `npm run typecheck` | `tsc --noEmit` ตรวจทั้ง `src/` รวมไฟล์เทส |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
 | `npm run prisma:migrate` | `prisma migrate dev` |
@@ -71,6 +73,7 @@ curl http://localhost:4000/api/v1/health
 | `npm run seed` | ใส่ข้อมูลทดสอบ (`prisma/seed.ts`) |
 | `npm run smoke:socket` | ทดสอบวงจรชีวิตห้องผ่าน Socket.IO จริง (ต้องมี `npm run dev` รันอยู่ + seed แล้ว) |
 | `npm run smoke:match` | เล่นแมตช์จนจบจริงแล้วตรวจแถวใน DB (~2 นาที เพราะรอ inspection/grace ของจริง) |
+| `npm run smoke:rated` | เล่นในห้องแข่งขันแล้วตรวจว่า Elo ขยับถูกทั้งสองฝั่ง (~1 นาที · ต้องตั้ง `ALLOW_TEST_COMPETITIVE_ROOM=1`) |
 
 ## ตัวแปรสภาพแวดล้อม
 
@@ -85,6 +88,7 @@ curl http://localhost:4000/api/v1/health
 | `JWT_ACCESS_EXPIRES` / `JWT_REFRESH_EXPIRES` | `15m` / `30d` | ADR-010 |
 | `FRONTEND_URL` | ตามค่า `CORS_ORIGIN` | OAuth redirect + ลิงก์รีเซ็ตรหัสผ่าน |
 | `DISABLE_RATE_LIMIT` | `false` | ตั้ง `true` เฉพาะตอน dev เวลายิงทดสอบรัว ๆ |
+| `ALLOW_TEST_COMPETITIVE_ROOM` | `0` | ตั้ง `1` ให้ `room:create` สร้างห้อง `competitive` ได้ ใช้กับ `npm run smoke:rated` ก่อนคิวจับคู่จะเสร็จ (ADR-038) — production ปิดตายเสมอ |
 | `GOOGLE_*` / `FACEBOOK_*` | — | เฟส 2 (OAuth) |
 
 ## โครงสร้างโค้ด
@@ -98,8 +102,9 @@ src/
 ├── types/cube.ts     4 ประเภทรูบิค + map ไป enum ของ Prisma
 ├── types/api.ts      แปลง DB (snake_case + enum ตัวใหญ่) → API (camelCase + ตัวเล็ก) ที่เดียว
 ├── types/express.d.ts  ต่อ type ให้ req.user
-├── lib/elo.ts        สูตร Elo
-├── lib/anti-cheat.ts เกณฑ์ soft ของ anti-cheat (pure function ล้วน)
+├── lib/elo.ts        สูตร Elo (+ `elo.test.ts`)
+├── lib/ranking.ts    จัดอันดับ + ตัดสินผู้ชนะ/เสมอ (+ `ranking.test.ts`)
+├── lib/anti-cheat.ts เกณฑ์ soft ของ anti-cheat (pure function ล้วน · + `anti-cheat.test.ts`)
 ├── lib/errors.ts     AppError + รหัส error ทั้ง 8 ตัวตามสัญญา API
 ├── lib/jwt.ts        เซ็น/ตรวจ access + refresh token
 ├── lib/password.ts   bcrypt
@@ -126,8 +131,10 @@ prisma/
 └── seed.ts           ผู้ใช้ทดสอบ 10 คน + Rating 40 แถว
 scripts/
 ├── recalculate-ratings.ts   ซ่อมตัวเลขสรุปในตาราง Rating
+├── smoke-helpers.ts         เครื่องมือที่สโมคเทสใช้ร่วมกัน (login · socket · รอ event · แก้คิวบ์)
 ├── smoke-socket.ts          ทดสอบห้อง Socket.IO กับ server จริง
-└── smoke-match.ts           เล่นแมตช์จนจบจริงแล้วตรวจ DB
+├── smoke-match.ts           เล่นแมตช์จนจบจริงแล้วตรวจ DB
+└── smoke-rated.ts           ห้องแข่งขัน — ตรวจว่า Elo ขยับถูกทั้งสองฝั่ง
 ```
 
 ## กฎที่ห้ามละเมิด (สรุปจาก `docs/`)
@@ -162,7 +169,7 @@ scripts/
 
 ยังไม่ได้ทำในเฟส 2: **OAuth Google/Facebook** · **ลืมรหัสผ่าน/รีเซ็ตรหัสผ่าน** (ต้องเลือกบริการส่งอีเมลก่อน) · UI ฝั่ง frontend
 
-หมายเหตุ: `prisma/seed.ts` กับ `scripts/` ไม่ได้อยู่ใน `tsconfig.json` (รันด้วย `tsx` ไม่ได้ build ลง `dist/`) — ยังโดน ESLint ตรวจตามปกติ
+หมายเหตุ: `prisma/seed.ts` กับ `scripts/` ไม่ได้อยู่ใน `tsconfig.json` (รันด้วย `tsx` ไม่ได้ build ลง `dist/`) — ยังโดน ESLint ตรวจตามปกติ · ไฟล์ `*.test.ts` อยู่ข้างไฟล์จริงใน `src/` แต่ `npm run build` ตัดทิ้งด้วย `tsconfig.build.json`
 
 ## เอกสาร
 

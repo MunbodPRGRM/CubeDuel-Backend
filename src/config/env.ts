@@ -25,6 +25,11 @@ if (accessSecret === refreshSecret) {
 
 export const env = {
   port: Number(process.env.PORT ?? 4000),
+  /**
+   * เปิดให้สร้างห้อง `competitive` ด้วยรหัสห้องเพื่อทดสอบการปรับ Elo ก่อนคิวจับคู่จะเสร็จ
+   * (เฟส 5 ก้อนที่ 1 — ADR-038) บน production ปิดตายเสมอไม่ว่าจะตั้งค่าไว้ยังไง
+   */
+  allowTestCompetitiveRoom: !isProduction && process.env.ALLOW_TEST_COMPETITIVE_ROOM === '1',
   nodeEnv,
   isProduction,
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',

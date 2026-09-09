@@ -5,15 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/index.js",
     "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "format": "prettier --write .",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
     "smoke:socket": "tsx scripts/smoke-socket.ts",
-    "smoke:match": "tsx scripts/smoke-match.ts"
+    "smoke:match": "tsx scripts/smoke-match.ts",
+    "smoke:rated": "tsx scripts/smoke-rated.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

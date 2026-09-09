@@ -39,6 +39,7 @@ import {
   playerRoomName,
   spectatorRoomName,
   type DnfReason,
+  type MatchKind,
   type MatchResult,
   type MatchResultEntry,
   type SolveMovePayload,
@@ -535,6 +536,7 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
 
   const finishedAtTs = Date.now();
   let matchId: number | null = null;
+  let matchKind: MatchKind | null = null;
 
   /**
    * ห้องฝึกซ้อมไม่บันทึกอะไรเลย · ที่เหลือแยกทางตามจำนวนผู้เล่น:
@@ -556,11 +558,11 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
             winnerId,
             players: outcomes,
           });
-          /**
-           * ยังไม่ส่งเลขนี้ไปกับ `match:finished` / snapshot — `GET /matches/:matchId`
-           * อ่านได้แค่ตาราง `Match` เลขจึงชนกันได้ (เปิดใช้ในเฟส 6 ก้อนที่ 3)
-           */
+          // เลขของ **ตาราง `MultiplayerMatch`** — client ต้องอ่านด้วย
+          // `GET /multiplayer-matches/:id` เท่านั้น จึงต้องมี `matchKind` กำกับ (ADR-044 ข้อ 1)
           room.lastMultiplayerMatchId = multiplayerMatchId;
+          matchId = multiplayerMatchId;
+          matchKind = 'multiplayer';
           saved = true;
         } else {
           console.warn(
@@ -582,6 +584,7 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
         });
         // ให้ client ที่พลาด `match:finished` ขอผลย้อนหลังทาง REST ได้ (ADR-040 ข้อ 5)
         room.lastMatchId = matchId;
+        matchKind = '1v1';
         saved = true;
       }
       // Elo ที่ปรับแล้วต้องสะท้อนกลับเข้าห้องด้วย เผื่อเล่นรอบใหม่ในห้องเดิม
@@ -613,6 +616,7 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
 
   const payload: MatchResult = {
     matchId,
+    matchKind,
     roomKind: room.roomKind,
     cubeType: room.cubeType,
     scramble: room.scramble ?? '',

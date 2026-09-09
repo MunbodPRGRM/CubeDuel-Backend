@@ -99,8 +99,8 @@ export class Room {
   lastMatchId: number | null = null;
   /**
    * `multiplayer_match_id` ของรอบล่าสุด — เก็บแยกจาก `lastMatchId` เพราะเป็น **คนละตาราง**
-   * และเลขชนกันได้ · ยัง **ไม่ส่งไปกับ snapshot** จนกว่า `GET /matches/:matchId` จะอ่าน
-   * แมตช์หลายคนได้ (เฟส 6 ก้อนที่ 3) ไม่งั้นกด F5 แล้วจะได้ผลของแมตช์ 1v1 ที่เลขบังเอิญตรงกัน
+   * และเลขชนกันได้ · ส่งไปกับ snapshot คู่กับ `matchKind: 'multiplayer'` เพื่อให้ client
+   * ไปเรียก `GET /multiplayer-matches/:id` ถูกตัว (ADR-044 ข้อ 1)
    */
   lastMultiplayerMatchId: number | null = null;
 
@@ -312,7 +312,14 @@ export class Room {
       serverTs: Date.now(),
       phaseEndsAtTs: this.phaseEndsAtTs,
       serverStartTs: this.serverStartTs,
-      matchId: this.lastMatchId,
+      // สองฟิลด์นี้ขยับพร้อมกันเสมอ — ห้องหนึ่งห้องบันทึกลงได้ตารางเดียวอยู่แล้ว (ADR-044 ข้อ 1)
+      matchId: this.lastMultiplayerMatchId ?? this.lastMatchId,
+      matchKind:
+        this.lastMultiplayerMatchId !== null
+          ? 'multiplayer'
+          : this.lastMatchId !== null
+            ? '1v1'
+            : null,
     };
   }
 }

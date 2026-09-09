@@ -99,6 +99,9 @@ function socketOf(io: TypedServer, entry: QueueEntry): TypedSocket | null {
 function sendStatus(io: TypedServer, entry: QueueEntry, now: number): void {
   const waitedMs = now - entry.queuedAtTs;
   socketOf(io, entry)?.emit('queue:status', {
+    // server พาคนกลับเข้าคิวเองได้ client จึงจำเองไม่ได้ว่ากำลังรออะไรอยู่ (ADR-044 ข้อ 2)
+    kind: entry.kind,
+    cubeType: entry.cubeType,
     waitedMs,
     // คิวห้องหลายคนไม่ใช้ช่วง Elo เลย จึงเป็น null เสมอ (game-rules.md ข้อ 8)
     eloWindow: entry.kind === 'multiplayer' ? null : eloWindowFor(waitedMs),

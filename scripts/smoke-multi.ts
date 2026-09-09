@@ -18,6 +18,7 @@
 import { CubeType, PrismaClient, RoomMode, SolveResult } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
 import {
+  API,
   check,
   connect,
   emit,
@@ -56,6 +57,26 @@ interface Snapshot {
   roomCode: string | null;
   state: string;
   maxPlayers: number;
+  matchId: number | null;
+  matchKind: '1v1' | 'multiplayer' | null;
+}
+
+/** รูปของ `GET /multiplayer-matches/:multiplayerMatchId` (api-contract.md ข้อ 3) */
+interface MultiplayerMatchDetail {
+  multiplayerMatchId: number;
+  roomMode: 'auto' | 'custom';
+  playerCount: number;
+  winnerId: number | null;
+  ratingApplied: boolean;
+  players: {
+    userId: number;
+    rankNo: number;
+    solveTime: number | null;
+    result: string;
+    eloBefore: number | null;
+    eloAfter: number | null;
+    eloChange: number | null;
+  }[];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -234,9 +255,9 @@ async function main(): Promise<void> {
   check('roomKind = multiplayer', result1?.roomKind === 'multiplayer', result1?.roomKind);
   check('โหมด auto ปรับคะแนนจริง (ratingApplied = true)', result1?.ratingApplied === true);
   check(
-    'matchId ยังเป็น null — GET /matches/:matchId ยังอ่านแมตช์หลายคนไม่ได้ (ก้อนที่ 3)',
-    result1?.matchId === null,
-    result1?.matchId,
+    'match:finished แนบ matchId ของแมตช์หลายคนพร้อม matchKind กำกับ (ADR-044 ข้อ 1)',
+    typeof result1?.matchId === 'number' && result1.matchKind === 'multiplayer',
+    [result1?.matchId, result1?.matchKind],
   );
   check(
     'opponent:move กระจายถึงผู้เล่นคนอื่นครบทุกคนที่หมุน (ไม่ใช่แค่คู่เดียวแบบ 1v1)',
@@ -313,6 +334,57 @@ async function main(): Promise<void> {
     multi1?.participants.every((row) => row.rankNo === rank(row.userId)?.rankNo) === true,
     multi1?.participants.map((row) => [row.userId, row.rankNo]),
   );
+
+  // ---------------------------------------------------------------- อ่านผลย้อนหลัง (ADR-044 ข้อ 1)
+
+  check(
+    'matchId ที่ส่งให้ client คือ multiplayer_match_id จริง ไม่ใช่ match_id',
+    result1?.matchId === multi1?.multiplayerMatchId,
+    [result1?.matchId, multi1?.multiplayerMatchId],
+  );
+
+  const finishedSnapshot = states.filter((snapshot) => snapshot.state === 'FINISHED').at(-1);
+  check(
+    'snapshot ตอน FINISHED แนบ matchId + matchKind ชุดเดียวกับ match:finished (กด F5 แล้วผลยังอยู่)',
+    finishedSnapshot?.matchId === result1?.matchId &&
+      finishedSnapshot?.matchKind === 'multiplayer',
+    [finishedSnapshot?.matchId, finishedSnapshot?.matchKind],
+  );
+
+  const multiRes = await fetch(`${API}/multiplayer-matches/${result1!.matchId!}`);
+  const multiDetail = ((await multiRes.json()) as { data?: MultiplayerMatchDetail }).data ?? null;
+  check(
+    'GET /multiplayer-matches/:id ตอบ 200 พร้อมข้อมูลของแมตช์ที่เพิ่งจบ',
+    multiRes.status === 200 && multiDetail?.multiplayerMatchId === result1!.matchId,
+    [multiRes.status, multiDetail?.multiplayerMatchId],
+  );
+  check(
+    'REST คืน roomMode / playerCount / ratingApplied ของโหมด auto',
+    multiDetail?.roomMode === 'auto' &&
+      multiDetail.playerCount === 4 &&
+      multiDetail.ratingApplied === true,
+    [multiDetail?.roomMode, multiDetail?.playerCount, multiDetail?.ratingApplied],
+  );
+  check(
+    'REST เรียงตาม rankNo และ Elo ก่อน→หลัง ตรงกับ match:finished ทุกแถว',
+    multiDetail?.players.length === 4 &&
+      multiDetail.players.every((row, index) => index === 0 || row.rankNo >= multiDetail.players[index - 1]!.rankNo) &&
+      multiDetail.players.every(
+        (row) =>
+          row.eloBefore === BASELINE_ELO &&
+          row.eloChange === rank(row.userId)?.eloChange &&
+          row.eloAfter === rank(row.userId)?.eloAfter,
+      ),
+    multiDetail?.players.map((row) => [row.userId, row.rankNo, row.eloBefore, row.eloAfter]),
+  );
+  check(
+    'REST คืน winnerId = คนที่ได้อันดับ 1 คนเดียวและแก้เสร็จจริง',
+    multiDetail?.winnerId === alice.userId,
+    multiDetail?.winnerId,
+  );
+
+  const missing = await fetch(`${API}/multiplayer-matches/999999999`);
+  check('ไม่พบแมตช์หลายคน → 404', missing.status === 404, missing.status);
 
   const after1 = await ratingSnapshot(quartet);
   check(

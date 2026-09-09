@@ -384,6 +384,44 @@ export interface MatchDetail {
   players: MatchDetailPlayer[];
 }
 
+/**
+ * ผลของผู้เข้าร่วมแมตช์หลายคนหนึ่งคน — เหมือน `MatchDetailPlayer` ทุกช่อง **ยกเว้นไม่มี
+ * `seatNo`** เพราะตาราง participant ไม่มีคอลัมน์ลำดับที่นั่ง (database-schema.md ตารางที่ 8)
+ */
+export interface MultiplayerMatchDetailPlayer {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** เก็บใน DB จริง ไม่ได้คำนวณใหม่แบบ 1v1 */
+  rankNo: number;
+  /** วินาที — null = DNF/ยอมแพ้ (ดู `result` ควบคู่) */
+  solveTime: number | null;
+  result: SolveStatus;
+  moveCount: number;
+  /** null ทั้งสามช่องในโหมด custom ที่ไม่ปรับคะแนน */
+  eloBefore: number | null;
+  eloAfter: number | null;
+  eloChange: number | null;
+}
+
+export interface MultiplayerMatchDetail {
+  multiplayerMatchId: number;
+  roomMode: 'auto' | 'custom';
+  cubeType: ApiCubeType;
+  scramble: string;
+  /** มีเฉพาะโหมด custom */
+  roomCode: string | null;
+  /** 3 หรือ 4 */
+  playerCount: number;
+  /** null = ไม่มีใครได้อันดับ 1 คนเดียว (เสมอ หรือ DNF ทั้งห้อง) */
+  winnerId: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+  ratingApplied: boolean;
+  /** เรียงตาม `rankNo` แล้ว (ผู้ชนะอยู่บนสุด) */
+  players: MultiplayerMatchDetailPlayer[];
+}
+
 const STATUS_OF: Record<SolveResult, SolveStatus> = {
   [SolveResult.SOLVED]: 'solved',
   [SolveResult.DNF]: 'dnf',
@@ -464,6 +502,65 @@ export async function getMatchDetail(matchId: number): Promise<MatchDetail> {
     startedAt: match.startedAt.toISOString(),
     finishedAt: match.finishedAt?.toISOString() ?? null,
     ratingApplied: match.roomType === RoomType.COMPETITIVE,
+    players,
+  };
+}
+
+
+/**
+ * ผลของแมตช์ผู้เล่นหลายคนหนึ่งแมตช์ (api-contract.md ข้อ 3)
+ *
+ * **คนละตารางกับ `getMatchDetail()` และเลข id ชนกันได้** — คนเรียกต้องรู้มาก่อนแล้วว่า
+ * เลขนี้เป็นของตารางไหน (`RoomSnapshot.matchKind` เป็นคนบอก — ADR-044 ข้อ 1)
+ *
+ * ต่างจาก 1v1 สองเรื่อง: `rank_no` **เก็บไว้ใน DB จริง** จึงไม่ต้องคำนวณใหม่ · ไม่มีคอลัมน์
+ * `winner_id` จึงอ่านจาก participant ที่ได้อันดับ 1 คนเดียวและแก้เสร็จจริง (กติกาเดียวกับ
+ * `findWinnerId()` ฝั่ง socket)
+ */
+export async function getMultiplayerMatchDetail(
+  multiplayerMatchId: number,
+): Promise<MultiplayerMatchDetail> {
+  const match = await prisma.multiplayerMatch.findUnique({
+    where: { multiplayerMatchId },
+    include: {
+      participants: {
+        include: { user: { select: { userId: true, username: true, nickname: true } } },
+      },
+    },
+  });
+  if (!match) throw errors.notFound('ไม่พบแมตช์นี้');
+
+  const players: MultiplayerMatchDetailPlayer[] = match.participants
+    .map((row) => ({
+      userId: row.user.userId,
+      username: row.user.username,
+      nickname: row.user.nickname,
+      rankNo: row.rankNo,
+      solveTime: row.solveTime === null ? null : row.solveTime.toNumber(),
+      result: STATUS_OF[row.result],
+      moveCount: row.moveCount ?? 0,
+      // โหมด custom ไม่ปรับคะแนน → NULL ทั้งสามช่อง (database-schema.md ตารางที่ 8)
+      eloBefore: row.eloChange === null ? null : row.eloBefore,
+      eloAfter:
+        row.eloChange === null || row.eloBefore === null ? null : row.eloBefore + row.eloChange,
+      eloChange: row.eloChange,
+    }))
+    .sort((a, b) => a.rankNo - b.rankNo);
+
+  // ผู้ชนะ = คนเดียวที่ได้อันดับ 1 **และแก้เสร็จจริง** — เสมอหรือ DNF ทั้งห้องคืน null
+  const first = players.filter((player) => player.rankNo === 1 && player.result === 'solved');
+
+  return {
+    multiplayerMatchId: match.multiplayerMatchId,
+    roomMode: match.roomMode === RoomMode.AUTO ? 'auto' : 'custom',
+    cubeType: PRISMA_TO_CUBE_TYPE[match.cubeType],
+    scramble: match.scramble,
+    roomCode: match.roomCode,
+    playerCount: match.playerCount,
+    winnerId: first.length === 1 ? first[0]!.userId : null,
+    startedAt: match.startedAt.toISOString(),
+    finishedAt: match.finishedAt?.toISOString() ?? null,
+    ratingApplied: match.roomMode === RoomMode.AUTO,
     players,
   };
 }

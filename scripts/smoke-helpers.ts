@@ -99,6 +99,8 @@ export async function sendMoves(socket: Socket, moves: string[], gapMs = 0): Pro
 /** ผลแมตช์ที่ `match:finished` ส่งกลับมา (เท่าที่สโมคเทสใช้) */
 export interface SmokeMatchResult {
   matchId: number | null;
+  /** `matchId` เป็นเลขของตารางไหน (ADR-044 ข้อ 1) */
+  matchKind: '1v1' | 'multiplayer' | null;
   roomKind: 'competitive' | 'multiplayer' | 'custom';
   ratingApplied: boolean;
   scramble: string;

@@ -1,21 +1,26 @@
 /**
- * คิวจับคู่อัตโนมัติของห้องแข่งขัน 1v1 — อยู่ใน memory ของ process เดียว เหมือนทะเบียนห้อง
+ * คิวจับคู่อัตโนมัติ — อยู่ใน memory ของ process เดียว เหมือนทะเบียนห้อง
  *
- * กติกา: `docs/game-rules.md` ข้อ 8 (ช่วง Elo ขยายตามเวลารอ · ห้ามเจอคนเดิมซ้ำติดกัน · หมดเวลา 180 วิ)
- * สัญญา event: `docs/socket-events.md` ข้อ 4 · การตัดสินใจที่เอกสารไม่ได้ระบุอยู่ใน ADR-039
+ * รองรับสองแบบที่ **แยกช่องกันสนิท** (`kind` + `cubeType` เป็นตัวแบ่งช่อง):
+ *   - `competitive` = 1v1 · ช่วง Elo ขยายตามเวลารอ · ห้ามเจอคนเดิมซ้ำติดกัน
+ *   - `multiplayer` = 3–4 คน · ไม่ใช้ช่วง Elo · ครบ 4 เริ่มทันที รอเกิน 60 วิแล้วมี 3 คนก็เริ่ม
+ *
+ * กติกา: `docs/game-rules.md` ข้อ 8 (หมดเวลารอ 180 วิเหมือนกันทั้งสองแบบ)
+ * สัญญา event: `docs/socket-events.md` ข้อ 4 · การตัดสินใจที่เอกสารไม่ได้ระบุอยู่ใน ADR-039 + ADR-043
  *
  * หลักการของไฟล์นี้:
- *   - **ตรรกะเลือกคู่ไม่อยู่ที่นี่** อยู่ที่ `lib/matchmaking.ts` ซึ่งเป็น pure function มีเทสคุม
+ *   - **ตรรกะเลือกคู่/จับกลุ่มไม่อยู่ที่นี่** อยู่ที่ `lib/matchmaking.ts` ซึ่งเป็น pure function มีเทสคุม
  *   - รายการในคิวผูกกับ **socket ที่กดเข้าคิว** — socket นั้นหลุด = ออกจากคิวทันที (ADR-039 ข้อ 1)
  *   - ตัวจับเวลาเปิดตอนมีคนเข้าคิวคนแรก ปิดตอนคิวว่าง (ADR-039 ข้อ 7)
  */
 import {
   MATCHED_DELAY_MS,
+  MULTIPLAYER_ROOM_MIN,
   QUEUE_STATUS_INTERVAL_MS,
   QUEUE_TICK_MS,
   QUEUE_TIMEOUT_MS,
 } from '../constants.js';
-import { eloWindowFor, pairUp, type QueueCandidate } from '../lib/matchmaking.js';
+import { eloWindowFor, groupUp, pairUp, type QueueCandidate } from '../lib/matchmaking.js';
 import type { TypedServer, TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import { beginLoading } from './match.js';
@@ -26,9 +31,17 @@ import {
   eloOf,
   joinAsPlayer,
   leavePreviousRoom,
+  removePlayerFromRoom,
 } from './room-service.js';
 import type { Room } from './room.js';
-import type { CubeType, QueueJoinPayload, QueueJoinResult, QueueKind } from './types.js';
+import type {
+  CubeType,
+  QueueJoinPayload,
+  QueueJoinResult,
+  QueueKind,
+  RoomKind,
+  RoomMode,
+} from './types.js';
 
 /** คู่ล่าสุดจำไว้นานเท่านี้ แล้วถือว่าเจอกันใหม่ได้ (ADR-039 ข้อ 4) */
 const LAST_OPPONENT_TTL_MS = 30 * 60_000;
@@ -84,11 +97,20 @@ function socketOf(io: TypedServer, entry: QueueEntry): TypedSocket | null {
 }
 
 function sendStatus(io: TypedServer, entry: QueueEntry, now: number): void {
+  const waitedMs = now - entry.queuedAtTs;
   socketOf(io, entry)?.emit('queue:status', {
-    waitedMs: now - entry.queuedAtTs,
-    eloWindow: eloWindowFor(now - entry.queuedAtTs),
+    waitedMs,
+    // คิวห้องหลายคนไม่ใช้ช่วง Elo เลย จึงเป็น null เสมอ (game-rules.md ข้อ 8)
+    eloWindow: entry.kind === 'multiplayer' ? null : eloWindowFor(waitedMs),
     playersInQueue: countInSlot(slotKey(entry)),
   });
+}
+
+/** ห้องที่ช่องคิวนี้จะสร้างขึ้นมา — คิว 1v1 ได้ห้องแข่งขัน · คิวหลายคนได้ห้องโหมด auto */
+function roomShapeOf(kind: QueueKind): { roomKind: RoomKind; roomMode: RoomMode | null } {
+  return kind === 'multiplayer'
+    ? { roomKind: 'multiplayer', roomMode: 'auto' }
+    : { roomKind: 'competitive', roomMode: null };
 }
 
 // ---------------------------------------------------------------- เข้า/ออกคิว
@@ -171,7 +193,20 @@ function stopTickerIfIdle(): void {
   ticker = null;
 }
 
-/** กวาดคิวหนึ่งรอบ: จับคู่ก่อน แล้วค่อยแจ้งสถานะ/หมดเวลาให้คนที่ยังรออยู่ */
+/**
+ * ถอนทุกคนในกลุ่มออกจากคิวแล้วเปิดห้องให้
+ * คืนโดยไม่ทำอะไรถ้ามีใครหลุดออกจากคิวไประหว่างนี้ (คนที่เหลือรอ tick ถัดไปเอง)
+ */
+function takeGroup(io: TypedServer, userIds: readonly number[]): void {
+  const entries = userIds.map((userId) => queue.get(userId));
+  if (entries.some((entry) => entry === undefined)) return;
+
+  const group = entries as QueueEntry[];
+  for (const entry of group) queue.delete(entry.userId);
+  void openMatchedRoom(io, group);
+}
+
+/** กวาดคิวหนึ่งรอบ: จับคู่/จับกลุ่มก่อน แล้วค่อยแจ้งสถานะ/หมดเวลาให้คนที่ยังรออยู่ */
 function tick(io: TypedServer): void {
   const now = Date.now();
 
@@ -184,13 +219,18 @@ function tick(io: TypedServer): void {
   }
 
   for (const entries of slots.values()) {
-    for (const pair of pairUp(entries, now)) {
-      const a = queue.get(pair.a.userId);
-      const b = queue.get(pair.b.userId);
-      if (!a || !b) continue;
-      queue.delete(a.userId);
-      queue.delete(b.userId);
-      void openMatchedRoom(io, a, b);
+    // ทุกคนในช่องเดียวกันมี kind เท่ากันเสมอ (slotKey ประกอบด้วย kind)
+    if (entries[0]?.kind === 'multiplayer') {
+      for (const group of groupUp(entries, now)) {
+        takeGroup(
+          io,
+          group.map((waiter) => waiter.userId),
+        );
+      }
+    } else {
+      for (const pair of pairUp(entries, now)) {
+        takeGroup(io, [pair.a.userId, pair.b.userId]);
+      }
     }
   }
 
@@ -214,34 +254,40 @@ function tick(io: TypedServer): void {
 // ---------------------------------------------------------------- เจอคู่แล้ว
 
 /**
- * สร้างห้องแข่งขันของคู่ที่จับได้ แล้วดันทั้งคู่เข้าห้อง
+ * สร้างห้องของกลุ่มที่จับได้ แล้วดันทุกคนเข้าห้อง (2 คนสำหรับคิว 1v1 · 3–4 คนสำหรับคิวหลายคน)
  * ห้องนี้ **ไม่มีรหัสห้อง ไม่มีผู้ชม และกดเริ่มเองไม่ได้** — server เริ่มให้เอง (ADR-039 ข้อ 5)
  */
-async function openMatchedRoom(io: TypedServer, a: QueueEntry, b: QueueEntry): Promise<void> {
-  const socketA = socketOf(io, a);
-  const socketB = socketOf(io, b);
+async function openMatchedRoom(io: TypedServer, group: readonly QueueEntry[]): Promise<void> {
+  const first = group[0];
+  if (!first) return;
 
-  // อีกฝ่ายเพิ่งหลุดไปพอดี — คนที่ยังอยู่กลับเข้าคิวต่อโดยไม่เสียอะไร
-  if (!socketA || !socketB) {
-    if (socketA) requeue(io, a);
-    if (socketB) requeue(io, b);
+  /**
+   * บางคนอาจเพิ่งหลุดไปพอดีระหว่างที่ tick กำลังจับกลุ่ม — ถ้าคนที่ยังต่ออยู่ไม่พอเปิดห้อง
+   * ก็ส่งกลับเข้าคิวโดยไม่เสียอะไร (คิวหลายคนต้องการอย่างน้อย 3 · คิว 1v1 ต้องการ 2)
+   */
+  const required = first.kind === 'multiplayer' ? MULTIPLAYER_ROOM_MIN : 2;
+  const live = group
+    .map((entry) => ({ entry, socket: socketOf(io, entry) }))
+    .filter((seat): seat is { entry: QueueEntry; socket: TypedSocket } => seat.socket !== null);
+
+  if (live.length < required) {
+    for (const seat of live) requeue(io, seat.entry);
     return;
   }
 
+  const shape = roomShapeOf(first.kind);
   const room = createRoom({
-    roomKind: 'competitive',
-    // roomMode มีความหมายเฉพาะห้องผู้เล่นหลายคน — ห้อง 1v1 เป็น null เสมอ
-    roomMode: null,
-    cubeType: a.cubeType,
-    maxPlayers: 2,
+    ...shape,
+    cubeType: first.cubeType,
+    // ขนาดห้องคือจำนวนคนที่คิวจับมาได้จริง (กลุ่มเล็กที่รอครบ 60 วิได้ห้อง 3 คน)
+    maxPlayers: live.length,
     withCode: false,
   });
   // ยุบก่อนเริ่มจับเวลาเมื่อไร คนที่ยังต่ออยู่กลับเข้าคิวเอง (game-rules.md ข้อ 6 · ADR-039 ข้อ 6)
   room.onAbort = (aborted) => requeueFromRoom(io, aborted);
 
   try {
-    await joinAsPlayer(io, socketA, room);
-    await joinAsPlayer(io, socketB, room);
+    for (const seat of live) await joinAsPlayer(io, seat.socket, room);
   } catch (error) {
     console.error('[queue] พาผู้เล่นเข้าห้องที่จับคู่ได้ไม่สำเร็จ', error);
     abortRoom(io, room, 'player_left', 'เข้าห้องที่จับคู่ได้ไม่สำเร็จ กลับเข้าคิวให้อัตโนมัติ');
@@ -249,14 +295,20 @@ async function openMatchedRoom(io: TypedServer, a: QueueEntry, b: QueueEntry): P
   }
 
   const now = Date.now();
-  rememberOpponents(a.userId, b.userId, now);
+  // "ห้ามเจอคนเดิมซ้ำติดกัน" เป็นกติกาของคิว 1v1 เท่านั้น (game-rules.md ข้อ 8)
+  const [a, b] = live;
+  if (live.length === 2 && a && b) rememberOpponents(a.entry.userId, b.entry.userId, now);
 
   room.state = 'MATCHED';
   room.touch();
 
   const players = [...room.players.values()].map((player) => room.toPublicPlayer(player));
-  for (const socket of [socketA, socketB]) {
-    socket.emit('queue:matched', { roomId: room.roomId, cubeType: room.cubeType, players });
+  for (const seat of live) {
+    seat.socket.emit('queue:matched', {
+      roomId: room.roomId,
+      cubeType: room.cubeType,
+      players,
+    });
   }
   broadcastState(io, room);
 
@@ -264,17 +316,31 @@ async function openMatchedRoom(io: TypedServer, a: QueueEntry, b: QueueEntry): P
   room.phaseTimer = setTimeout(() => void startMatchedRoom(io, room), MATCHED_DELAY_MS);
 }
 
+/**
+ * คนที่หลุดไปในช่วง `MATCHED` 2 วินาที — `beginLoading()` ไม่ยอมเริ่มถ้ายังมีที่นั่งที่ไม่มี socket
+ * และ grace 30 วินาทีก็ยาวเกินกว่าจะรอ · ห้องหลายคนจึงถอดคนที่หลุดออกแล้วเริ่มด้วยคนที่เหลือ
+ * ถ้ายังถึงขั้นต่ำ (ADR-041 ข้อ 3) — ห้อง 1v1 ไม่มีทางเหลือพอ จึงตกไปเป็นการยุบห้องเหมือนเดิม
+ */
+function dropDisconnectedBeforeStart(io: TypedServer, room: Room): void {
+  if (room.roomKind !== 'multiplayer') return;
+  const offline = [...room.players.values()].filter((player) => player.sockets.size === 0);
+  if (offline.length === 0) return;
+  if (room.players.size - offline.length < room.minPlayersToStart) return;
+  for (const player of offline) removePlayerFromRoom(io, room, player.userId, 'disconnected');
+}
+
 /** ครบ 2 วินาทีหลัง `MATCHED` — เริ่มแมตช์ให้เอง ไม่มีใครต้องกดปุ่ม */
 async function startMatchedRoom(io: TypedServer, room: Room): Promise<void> {
   if (room.state !== 'MATCHED') return;
   room.clearPhaseTimer();
+  dropDisconnectedBeforeStart(io, room);
 
   try {
     await beginLoading(io, room);
   } catch (error) {
     // ผู้เล่นหลุดไปในช่วง 2 วินาทีนั้นพอดี — ยุบห้องแล้วส่งคนที่เหลือกลับเข้าคิว
     console.error(`[queue] ห้อง ${room.roomId} เริ่มไม่สำเร็จ`, error);
-    abortRoom(io, room, 'player_left', 'คู่แข่งหลุดการเชื่อมต่อก่อนเริ่ม กลับเข้าคิวให้อัตโนมัติ');
+    abortRoom(io, room, 'player_left', 'ผู้เล่นหลุดการเชื่อมต่อก่อนเริ่ม กลับเข้าคิวให้อัตโนมัติ');
   }
 }
 
@@ -307,20 +373,23 @@ function requeueFromRoom(io: TypedServer, room: Room): void {
   // เริ่มจับเวลาไปแล้วถือว่าแมตช์เกิดขึ้นจริง ผลถูกตัดสินไปตามกติกาข้อ 6 แล้ว
   if (room.serverStartTs !== null) return;
 
+  const kind: QueueKind = room.roomKind === 'multiplayer' ? 'multiplayer' : 'competitive';
   const now = Date.now();
   const players = [...room.players.values()];
   for (const player of players) {
     const socketId = [...player.sockets][0];
     if (socketId === undefined) continue;
 
-    const opponent = players.find((other) => other.userId !== player.userId);
+    // "คู่ล่าสุด" มีความหมายเฉพาะห้อง 1v1 — ห้องหลายคนไม่มีคู่ต่อสู้คนเดียวให้จำ
+    const opponent =
+      players.length === 2 ? players.find((other) => other.userId !== player.userId) : undefined;
     requeue(
       io,
       {
         userId: player.userId,
         socketId,
         cubeType: room.cubeType,
-        kind: 'competitive',
+        kind,
         eloRating: player.eloRating,
         queuedAtTs: now,
         lastOpponentId: null,

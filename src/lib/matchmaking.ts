@@ -1,10 +1,17 @@
 /**
- * ตรรกะการเลือกคู่ของคิวจับคู่อัตโนมัติ — **pure function ล้วน** (ADR-039 ข้อ 8)
+ * ตรรกะการเลือกคู่/จับกลุ่มของคิวจับคู่อัตโนมัติ — **pure function ล้วน** (ADR-039 ข้อ 8)
  *
- * ที่มาของกติกา: `docs/game-rules.md` ข้อ 8 (ช่วง Elo ขยายตามเวลารอ · ห้ามเจอคนเดิมซ้ำติดกัน)
+ * ที่มาของกติกา: `docs/game-rules.md` ข้อ 8
+ *   - 1v1 (`pairUp`) — ช่วง Elo ขยายตามเวลารอ · ห้ามเจอคนเดิมซ้ำติดกัน
+ *   - หลายคน (`groupUp`) — **ไม่ใช้ช่วง Elo** จับตามลำดับเข้าคิว (ADR-043 ข้อ 1)
  * ไฟล์นี้ไม่รู้จัก socket / prisma / Room — เวลาส่งเข้ามาเป็นพารามิเตอร์ `now` เสมอ
  * เพื่อให้เทสคุมกติกาได้โดยไม่ต้องตั้ง server (ทางเดียวกับ `lib/elo.ts` — ADR-038 ข้อ 2)
  */
+import {
+  MULTIPLAYER_ROOM_MAX,
+  MULTIPLAYER_ROOM_MIN,
+  MULTIPLAYER_SHORT_GROUP_AFTER_MS,
+} from '../constants.js';
 
 /** ช่วง Elo ที่ยอมรับ ตามเวลาที่รอมาแล้ว (game-rules.md ข้อ 8) — `null` = ไม่จำกัด */
 const ELO_WINDOW_STEPS: readonly { untilMs: number; window: number }[] = [
@@ -25,13 +32,22 @@ export function eloWindowFor(waitedMs: number): number | null {
   return null;
 }
 
-export interface QueueCandidate {
+/** สิ่งที่การจับกลุ่มห้องหลายคนต้องรู้ — แค่ว่าใครและเข้าคิวมาตั้งแต่เมื่อไร */
+export interface QueueWaiter {
   userId: number;
+  queuedAtTs: number;
+}
+
+export interface QueueCandidate extends QueueWaiter {
   /** Elo ของ `cube_type` ที่จะแข่ง — อ่านตอนเข้าคิวครั้งเดียว */
   eloRating: number;
-  queuedAtTs: number;
   /** คู่แข่งคนล่าสุด — เลี่ยงไว้ก่อนถ้ายังมีตัวเลือกอื่น (game-rules.md ข้อ 8) */
   lastOpponentId: number | null;
+}
+
+/** ลำดับสิทธิ์ในคิว: รอนานกว่าได้ก่อน · เข้าคิวพร้อมกันตัดสินด้วย `userId` ให้ผลคงที่ */
+function byWaitOrder(a: QueueWaiter, b: QueueWaiter): number {
+  return a.queuedAtTs - b.queuedAtTs || a.userId - b.userId;
 }
 
 export interface QueuePair {
@@ -88,7 +104,7 @@ function pickClosest(target: QueueCandidate, candidates: QueueCandidate[]): Queu
  * (ADR-039 ข้อ 3) · คนที่จับคู่ไม่ได้รอบนี้ก็รอ tick ถัดไปซึ่งช่วง Elo จะกว้างขึ้นเอง
  */
 export function pairUp(entries: readonly QueueCandidate[], now: number): QueuePair[] {
-  const waiting = [...entries].sort((a, b) => a.queuedAtTs - b.queuedAtTs || a.userId - b.userId);
+  const waiting = [...entries].sort(byWaitOrder);
   const taken = new Set<number>();
   const pairs: QueuePair[] = [];
 
@@ -114,4 +130,34 @@ export function pairUp(entries: readonly QueueCandidate[], now: number): QueuePa
   }
 
   return pairs;
+}
+
+// ---------------------------------------------------------------- ห้องผู้เล่นหลายคน
+
+/**
+ * จับกลุ่ม 3–4 คนของคิวห้องผู้เล่นหลายคน (ผู้เรียกแยกช่องตาม `kind` + `cubeType` มาแล้ว)
+ *
+ * กติกา (`game-rules.md` ข้อ 8): **ครบ 4 คนเริ่มทันที** · ถ้ายังไม่ครบ 4 แต่มีอย่างน้อย 3 คน
+ * และคนที่รอนานที่สุดรอเกิน 60 วินาทีแล้ว ให้เริ่มด้วย 3 คน · **ไม่ใช้ช่วง Elo เลย**
+ * เพราะกลุ่มใหญ่หาคนครบยากกว่ามาก (ADR-043 ข้อ 1)
+ *
+ * "ครบ 4 เริ่มทันที" มาก่อนเสมอ — คิวที่มี 6 คนจึงได้ห้อง 4 คนหนึ่งห้อง แล้วอีก 2 คนรอต่อ
+ * ไม่ใช่แตกเป็น 3+3 (ADR-043 ข้อ 2)
+ */
+export function groupUp(entries: readonly QueueWaiter[], now: number): QueueWaiter[][] {
+  const waiting = [...entries].sort(byWaitOrder);
+  const groups: QueueWaiter[][] = [];
+
+  while (waiting.length >= MULTIPLAYER_ROOM_MIN) {
+    if (waiting.length >= MULTIPLAYER_ROOM_MAX) {
+      groups.push(waiting.splice(0, MULTIPLAYER_ROOM_MAX));
+      continue;
+    }
+    // เหลือไม่ถึง 4 — ต้องให้คนหัวคิวรอครบ 60 วินาทีก่อนจึงยอมเริ่มด้วยกลุ่มเล็ก
+    const head = waiting[0]!;
+    if (now - head.queuedAtTs < MULTIPLAYER_SHORT_GROUP_AFTER_MS) break;
+    groups.push(waiting.splice(0, MULTIPLAYER_ROOM_MIN));
+  }
+
+  return groups;
 }

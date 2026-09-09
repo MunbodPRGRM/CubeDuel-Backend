@@ -1,16 +1,19 @@
 /**
- * เล่นห้อง **ผู้เล่นหลายคน** จนจบผ่าน Socket.IO แล้วตรวจตาราง `MultiplayerMatch` +
- * participant + `Rating` (เฟส 6 ก้อนที่ 1)
+ * ห้อง **ผู้เล่นหลายคน** ครบวงจรผ่าน Socket.IO — คิว auto 3–4 คน · ห้องสร้างเอง · Pairwise Elo
+ * (เฟส 6 ก้อนที่ 1 + ก้อนที่ 2)
  *
  * ต้องมี server รันอยู่ (`npm run dev`) + DB ที่ seed แล้ว (`npm run seed`)
- * และต้องตั้ง `ALLOW_TEST_COMPETITIVE_ROOM=1` ใน `.env` ของ server — ทางเข้าห้องหลายคนจริง
- * (คิว auto + หน้าสร้างห้อง) เป็นงานก้อนที่ 2 ตอนนี้จึงบังคับสร้างห้องผ่านสวิตช์ทดสอบ
- * รันด้วย: npm run smoke:multi     (ใช้เวลาราว 45 วินาที เพราะรอ inspection 15 วิ 2 รอบจริง ๆ)
+ * **ไม่ต้องใช้ `ALLOW_TEST_COMPETITIVE_ROOM` แล้ว** — ทางเข้าห้องหลายคนเปิดให้ผู้ใช้จริงตั้งแต่
+ * ก้อนที่ 2 (ADR-043 ข้อ 5) สโมคเทสจึงเดินสายเดียวกับเบราว์เซอร์ทุกขั้นตอน
+ * รันด้วย: npm run smoke:multi     (ใช้เวลาราว 2 นาทีครึ่ง เพราะรอ inspection 15 วิจริง 4 รอบ
+ *                                   และรอกติกา "60 วินาทีแล้วเริ่มด้วย 3 คน" ของจริงอีก 1 นาที)
  *
- * ครอบ: Pairwise Elo จริงในห้อง 4 คนโหมด auto · แถว `MultiplayerMatch` + participant ครบ ·
- *       `Rating` (elo / wins / losses / draws / matches_played / best_time) ของทุกคน ·
- *       `MatchFlag` ผูกกับ `multiplayer_match_id` และ **ไม่มี** `WIN_STREAK` (ADR-041 ข้อ 2) ·
- *       ห้อง 3 คนโหมด custom ไม่ปรับคะแนน · DNF ทั้งห้องต้องไม่พังตอนบันทึก (ADR-041 ข้อ 3)
+ * ครอบ: จับกลุ่ม 4 คนจาก `queue:join` จริง · คนที่ 4 เข้ามาตอนกำลังรอ · กติกา 60 วิ/3 คน ·
+ *       คิวหลายคนแยกช่องจากคิว 1v1 · Pairwise Elo + แถว `MultiplayerMatch` + participant ·
+ *       `Rating` ของทุกคน · `MatchFlag` ผูกกับ `multiplayer_match_id` และไม่มี `WIN_STREAK` ·
+ *       `opponent:move` / `opponent:progress` กระจายถูกเมื่อมีผู้เล่นเกิน 2 คน ·
+ *       ห้องสร้างเอง 3 คน (โหมด custom ไม่ปรับคะแนน) · ปิดผู้ชม · `E_ROOM_FULL` ·
+ *       DNF ทั้งห้องต้องไม่พังตอนบันทึก (ADR-041 ข้อ 3)
  */
 import { CubeType, PrismaClient, RoomMode, SolveResult } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
@@ -40,6 +43,25 @@ interface Player {
   socket: Socket;
 }
 
+interface Matched {
+  roomId: number;
+  cubeType: string;
+  players: { userId: number; username: string }[];
+}
+
+interface Snapshot {
+  roomId: number;
+  roomKind: string;
+  roomMode: string | null;
+  roomCode: string | null;
+  state: string;
+  maxPlayers: number;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function ratingOf(userId: number) {
   return prisma.rating.findUnique({
     where: { userId_cubeType: { userId, cubeType: PRISMA_CUBE_TYPE } },
@@ -53,31 +75,42 @@ async function setElo(userId: number, elo: number): Promise<void> {
   });
 }
 
-/** สร้างห้องหลายคนแล้วพาที่เหลือเข้าห้องด้วยรหัส — คนแรกในลิสต์เป็น host (seat 1) */
-async function openRoom(
-  players: Player[],
-  roomMode: 'auto' | 'custom',
-): Promise<{ roomId: number; roomCode: string }> {
-  const [host, ...guests] = players;
-  const created = await emit<{ roomId: number; roomCode: string }>(host!.socket, 'room:create', {
+function ratingSnapshot(players: Player[]) {
+  return Promise.all(
+    players.map(async (player) => [player.userId, (await ratingOf(player.userId))!] as const),
+  ).then((entries) => new Map(entries));
+}
+
+function joinQueue(player: Player, kind: 'competitive' | 'multiplayer' = 'multiplayer') {
+  return emit<{ queuedAtTs: number; playersInQueue: number }>(player.socket, 'queue:join', {
     cubeType: CUBE_TYPE,
-    kind: 'multiplayer',
-    maxPlayers: players.length,
-    roomMode,
+    kind,
   });
-  if (!created.ok) {
-    throw new Error(
-      `สร้างห้องหลายคนไม่ได้ (${created.error.code}: ${created.error.message}) — ตั้ง ALLOW_TEST_COMPETITIVE_ROOM=1 ใน .env ของ server แล้วรีสตาร์ทหรือยัง?`,
-    );
-  }
-  for (const guest of guests) {
-    const joined = await emit(guest.socket, 'room:join', {
-      roomCode: created.data.roomCode,
-      as: 'player',
-    });
-    if (!joined.ok) throw new Error(`${guest.name} เข้าห้องไม่ผ่าน: ${joined.error.code}`);
-  }
-  return created.data;
+}
+
+/**
+ * เก็บ `room:state` ทุกใบที่ผ่านเข้ามา — ต้องดักไว้ล่วงหน้า
+ * เพราะ server ส่งตามหลัง `queue:matched` ทันที ดักทีหลังจะไม่ทัน
+ */
+function recordStates(socket: Socket): Snapshot[] {
+  const seen: Snapshot[] = [];
+  socket.on('room:state', (snapshot: Snapshot) => seen.push(snapshot));
+  return seen;
+}
+
+/**
+ * ห้องที่มาจากคิว **ไม่มีใครกดเริ่ม** — server เริ่มให้เองหลัง `MATCHED`
+ * ผู้เรียกต้องดัก `match:loading` ไว้ก่อนเข้าคิว แล้วส่ง promise นั้นเข้ามา
+ */
+async function readyUpQueuedRound(
+  players: Player[],
+  loading: Promise<{ scramble: string } | null>,
+): Promise<string> {
+  const payload = await loading;
+  if (!payload) throw new Error('ไม่ได้รับ match:loading ของห้องที่จับกลุ่มได้');
+  for (const player of players) await emit(player.socket, 'solve:ready', {});
+  await waitFor(players[0]!.socket, 'match:started', 40_000);
+  return payload.scramble;
 }
 
 /**
@@ -95,37 +128,106 @@ async function solve(player: Player, scramble: string, gapMs: number): Promise<v
   if (!solved.ok) throw new Error(`${player.name} แจ้งแก้เสร็จไม่ผ่าน: ${solved.error.code}`);
 }
 
-async function main(): Promise<void> {
-  console.log(`\n👥 ทดสอบห้องผู้เล่นหลายคน + Pairwise Elo (${CUBE_TYPE})\n`);
+/** ทุกคนยอมแพ้ = จบรอบเร็ว ๆ โดยไม่ต้องรอ hard timeout */
+async function surrenderAll(players: Player[]): Promise<void> {
+  for (const player of players) await emit(player.socket, 'solve:surrender', {});
+}
 
-  const names = ['somchai', 'malee', 'nattapong', 'pimchanok'];
+async function leaveRoomAll(players: Player[]): Promise<void> {
+  for (const player of players) await emit(player.socket, 'room:leave', {});
+}
+
+async function main(): Promise<void> {
+  console.log(`\n👥 ทดสอบห้องผู้เล่นหลายคน — คิว auto + ห้องสร้างเอง (${CUBE_TYPE})\n`);
+
+  const names = ['somchai', 'malee', 'nattapong', 'pimchanok', 'thanawat'];
   const players: Player[] = [];
   for (const name of names) {
     const auth = await login(name);
     players.push({ name, ...auth, socket: await connect(auth.token) });
   }
-  const [alice, bob, chai, dao] = players as [Player, Player, Player, Player];
+  const [alice, bob, chai, dao, eve] = players as [Player, Player, Player, Player, Player];
+  const quartet = [alice, bob, chai, dao];
 
   // เริ่มจากคะแนนเท่ากันทุกคน ตัวเลขที่คาดหวังจะได้ไม่ขึ้นกับผลรันครั้งก่อน
   await Promise.all(players.map((player) => setElo(player.userId, BASELINE_ELO)));
-  const before = new Map(
-    await Promise.all(
-      players.map(async (player) => [player.userId, (await ratingOf(player.userId))!] as const),
-    ),
-  );
+  const before = await ratingSnapshot(quartet);
 
   // ---------------------------------------------------------------- รอบที่ 1
-  console.log('รอบที่ 1 — ห้อง 4 คน โหมด auto: แก้เสร็จ 2 · ยอมแพ้ 2');
-  await openRoom(players, 'auto');
-  const finished1 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished');
-  const round1 = await startRound(alice.socket, bob.socket, chai.socket, dao.socket);
+  console.log('รอบที่ 1 — คิว auto: 3 คนรออยู่ก่อน คนที่ 4 เข้ามาแล้วจับกลุ่มทันที');
+
+  const states = recordStates(alice.socket);
+  const matchedEvents = quartet.map((player) =>
+    waitFor<Matched>(player.socket, 'queue:matched', 30_000),
+  );
+  const loading1 = waitFor<{ scramble: string }>(alice.socket, 'match:loading', 30_000);
+
+  const joins = [];
+  for (const player of [alice, bob, chai]) joins.push(await joinQueue(player));
+  check(
+    'queue:join ที่ kind = multiplayer ผ่านแล้ว (เดิมตอบ E_VALIDATION)',
+    joins.every((ack) => ack.ok),
+    joins,
+  );
+  check(
+    'คนที่สามเห็นว่ามี 3 คนในช่องคิวเดียวกัน',
+    joins[2]?.ok === true && joins[2].data.playersInQueue === 3,
+    joins[2],
+  );
+
+  const tooSoon = await waitFor<Matched>(alice.socket, 'queue:matched', 6_000);
+  check('มี 3 คนแต่ยังรอไม่ถึง 60 วินาที = ยังไม่จับกลุ่ม', tooSoon === null, tooSoon);
+
+  const againInQueue = await joinQueue(alice);
+  check(
+    'queue:join ซ้ำในคิวหลายคน → E_ALREADY_IN_QUEUE',
+    !againInQueue.ok && againInQueue.error.code === 'E_ALREADY_IN_QUEUE',
+    againInQueue,
+  );
+
+  await joinQueue(dao);
+  const matched = await Promise.all(matchedEvents);
+  check('คนที่ 4 เข้ามาแล้วทั้งสี่คนได้ queue:matched ทันที', matched.every((m) => m !== null));
+  check(
+    'ทุกคนได้ห้องเดียวกันและ payload มีผู้เล่นครบ 4 คน',
+    new Set(matched.map((m) => m?.roomId)).size === 1 && matched[0]?.players.length === 4,
+    matched.map((m) => [m?.roomId, m?.players.length]),
+  );
+
+  const matchedSnapshot = states.find((snapshot) => snapshot.state === 'MATCHED');
+  check(
+    'ห้องที่ได้เป็น multiplayer โหมด auto ไม่มีรหัสห้อง (ADR-043 ข้อ 4)',
+    matchedSnapshot?.roomKind === 'multiplayer' &&
+      matchedSnapshot.roomMode === 'auto' &&
+      matchedSnapshot.roomCode === null &&
+      matchedSnapshot.maxPlayers === 4,
+    matchedSnapshot,
+  );
+
+  const startRejected = await emit(alice.socket, 'room:start', {});
+  check(
+    'ห้องจากคิวกดเริ่มเองไม่ได้ → E_INVALID_STATE',
+    !startRejected.ok && startRejected.error.code === 'E_INVALID_STATE',
+    startRejected,
+  );
+
+  // ผู้เล่นคนที่ไม่ได้แก้ต้องเห็นการหมุนของ "ทุกคน" ไม่ใช่แค่คนเดียวแบบห้อง 1v1
+  const movesSeenBy = new Set<number>();
+  const progressSeenBy = new Set<number>();
+  dao.socket.on('opponent:move', (payload: { userId: number }) => movesSeenBy.add(payload.userId));
+  dao.socket.on('opponent:progress', (payload: { userId: number }) =>
+    progressSeenBy.add(payload.userId),
+  );
+
+  const finished1 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished', 120_000);
+  const scramble1 = await readyUpQueuedRound(quartet, loading1);
 
   // Alice หมุนรัว → เร็วจนติดเกณฑ์ soft (ไว้ตรวจว่า MatchFlag ผูกกับแมตช์หลายคนได้)
-  await solve(alice, round1.scramble, 0);
+  await solve(alice, scramble1, 0);
   await emit(chai.socket, 'solve:surrender', {});
   await emit(dao.socket, 'solve:surrender', {});
   // Bob แก้เสร็จทีหลังในช่วงนับถอยหลัง 10 วินาที → อันดับ 2
-  await solve(bob, round1.scramble, 60);
+  await solve(bob, scramble1, 60);
   const result1 = await finished1;
 
   check('ได้รับ match:finished ของห้องหลายคน', result1 !== null, result1);
@@ -135,6 +237,16 @@ async function main(): Promise<void> {
     'matchId ยังเป็น null — GET /matches/:matchId ยังอ่านแมตช์หลายคนไม่ได้ (ก้อนที่ 3)',
     result1?.matchId === null,
     result1?.matchId,
+  );
+  check(
+    'opponent:move กระจายถึงผู้เล่นคนอื่นครบทุกคนที่หมุน (ไม่ใช่แค่คู่เดียวแบบ 1v1)',
+    movesSeenBy.has(alice.userId) && movesSeenBy.has(bob.userId) && !movesSeenBy.has(dao.userId),
+    [...movesSeenBy],
+  );
+  check(
+    'opponent:progress ของคนที่ยังแก้อยู่ส่งถึงคนที่ยอมแพ้ไปแล้วด้วย',
+    progressSeenBy.has(bob.userId),
+    [...progressSeenBy],
   );
 
   const rank = (userId: number) => result1?.results.find((entry) => entry.userId === userId);
@@ -167,7 +279,7 @@ async function main(): Promise<void> {
   check('room_mode = AUTO', multi1?.roomMode === RoomMode.AUTO, multi1?.roomMode);
   check('player_count = 4', multi1?.playerCount === 4, multi1?.playerCount);
   check(
-    'โหมด auto ไม่เก็บรหัสห้อง (คอลัมน์นี้มีความหมายเฉพาะโหมด custom)',
+    'ห้องจากคิวไม่มีรหัสห้องให้เก็บ',
     multi1?.roomCode === null,
     multi1?.roomCode,
   );
@@ -202,18 +314,14 @@ async function main(): Promise<void> {
     multi1?.participants.map((row) => [row.userId, row.rankNo]),
   );
 
-  const after1 = new Map(
-    await Promise.all(
-      players.map(async (player) => [player.userId, (await ratingOf(player.userId))!] as const),
-    ),
-  );
+  const after1 = await ratingSnapshot(quartet);
   check(
     'Rating: elo ของทุกคนขยับตาม elo_change ในทรานแซกชันเดียวกัน',
     after1.get(alice.userId)!.eloRating === 1016 &&
       after1.get(bob.userId)!.eloRating === 1006 &&
       after1.get(chai.userId)!.eloRating === 989 &&
       after1.get(dao.userId)!.eloRating === 989,
-    players.map((player) => [player.name, after1.get(player.userId)!.eloRating]),
+    quartet.map((player) => [player.name, after1.get(player.userId)!.eloRating]),
   );
   check(
     'Rating: ผู้ชนะได้ wins +1 · ที่เหลือได้ losses +1 (นับเหมือน 1v1 — ADR-041 ข้อ 1)',
@@ -221,7 +329,7 @@ async function main(): Promise<void> {
       after1.get(bob.userId)!.losses === before.get(bob.userId)!.losses + 1 &&
       after1.get(chai.userId)!.losses === before.get(chai.userId)!.losses + 1 &&
       after1.get(dao.userId)!.losses === before.get(dao.userId)!.losses + 1,
-    players.map((player) => [
+    quartet.map((player) => [
       player.name,
       after1.get(player.userId)!.wins,
       after1.get(player.userId)!.losses,
@@ -229,10 +337,9 @@ async function main(): Promise<void> {
   );
   check(
     'Rating: matches_played +1 ทุกคน',
-    players.every(
+    quartet.every(
       (player) =>
-        after1.get(player.userId)!.matchesPlayed ===
-        before.get(player.userId)!.matchesPlayed + 1,
+        after1.get(player.userId)!.matchesPlayed === before.get(player.userId)!.matchesPlayed + 1,
     ),
   );
   check(
@@ -260,84 +367,203 @@ async function main(): Promise<void> {
     flags1.map((flag) => flag.flagReason),
   );
 
-  for (const player of players) await emit(player.socket, 'room:leave', {});
+  dao.socket.removeAllListeners('opponent:move');
+  dao.socket.removeAllListeners('opponent:progress');
+  alice.socket.removeAllListeners('room:state');
+  await leaveRoomAll(quartet);
 
   // ---------------------------------------------------------------- รอบที่ 2
-  console.log('\nรอบที่ 2 — ห้อง 3 คน โหมด custom: ยอมแพ้ทั้งห้อง → DNF หมด ไม่ปรับคะแนน');
+  console.log('\nรอบที่ 2 — คิวหลายคนแยกช่องจากคิว 1v1 (ต้องไม่ดูดกันข้ามช่อง)');
+  const crossSlot = waitFor<Matched>(eve.socket, 'queue:matched', 5_000);
+  await joinQueue(eve, 'competitive');
+  const aliceQueuedAtTs = Date.now();
+  const trioJoin = await joinQueue(alice);
+  check(
+    'คนในคิว 1v1 ไม่ถูกนับรวมกับช่องคิวหลายคน',
+    trioJoin.ok && trioJoin.data.playersInQueue === 1,
+    trioJoin,
+  );
+  check('คนละ kind = ไม่มีวันจับกลุ่มกัน', (await crossSlot) === null);
+  await emit(eve.socket, 'queue:leave', {});
+
+  // ---------------------------------------------------------------- รอบที่ 3
+  console.log('\nรอบที่ 3 — คิว auto: มีแค่ 3 คน รอครบ 60 วินาทีแล้วเริ่มด้วย 3 คน');
   const trio = [alice, bob, chai];
-  const room2 = await openRoom(trio, 'custom');
-  const finished2 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished');
-  await startRound(alice.socket, bob.socket, chai.socket);
-  for (const player of trio) await emit(player.socket, 'solve:surrender', {});
-  const result2 = await finished2;
+  // ตั้งคะแนนกลับให้เท่ากันก่อน — เสมอทั้งห้องจะได้ 0 แต้มก็ต่อเมื่อคะแนนตั้งต้นเท่ากัน
+  await Promise.all(trio.map((player) => setElo(player.userId, BASELINE_ELO)));
+  const beforeTrio = await ratingSnapshot(trio);
+  const trioStates = recordStates(alice.socket);
+  const trioMatched = waitFor<Matched>(alice.socket, 'queue:matched', 90_000);
+  const loading3 = waitFor<{ scramble: string }>(alice.socket, 'match:loading', 100_000);
+  for (const player of [bob, chai]) await joinQueue(player);
 
-  check('DNF ทั้งห้องแล้วยังบันทึกผลได้ ไม่พัง (ADR-041 ข้อ 3)', result2 !== null);
-  check('โหมด custom ไม่ปรับคะแนน (ratingApplied = false)', result2?.ratingApplied === false);
+  const matched3 = await trioMatched;
+  // นับจากตอน alice เข้าคิว (หัวคิว) เพราะกติกา 60 วิดูคนที่รอนานที่สุด
+  const waitedMs = Date.now() - aliceQueuedAtTs;
+  check('รอครบ 60 วินาทีแล้วจับกลุ่มให้ 3 คน', matched3 !== null && matched3.players.length === 3, {
+    players: matched3?.players.length,
+    waitedMs,
+  });
+  check('ไม่ได้จับกลุ่มก่อนหัวคิวรอครบ 60 วินาที', waitedMs >= 60_000, { waitedMs });
+
+  // `queue:matched` ถูกส่งก่อน `room:state` เสมอ — รอให้ snapshot ตามมาถึงก่อนค่อยอ่าน
+  await sleep(500);
+  const trioSnapshot = trioStates.find((snapshot) => snapshot.state === 'MATCHED');
   check(
-    'โหมด custom: elo ทั้งสามช่องเป็น null ทุกคน',
-    result2?.results.every(
-      (entry) => entry.eloBefore === null && entry.eloAfter === null && entry.eloChange === null,
-    ) === true,
-    result2?.results.map((entry) => [entry.username, entry.eloChange]),
-  );
-  check(
-    'ไม่มีใครแก้สำเร็จ → ทุกคนได้อันดับ 1 เท่ากัน (game-rules.md ข้อ 7)',
-    result2?.results.every((entry) => entry.rankNo === 1) === true,
-    result2?.results.map((entry) => [entry.username, entry.rankNo]),
+    'ห้อง 3 คนจากคิวเป็นโหมด auto และ maxPlayers = 3',
+    trioSnapshot?.roomMode === 'auto' && trioSnapshot.maxPlayers === 3,
+    trioSnapshot,
   );
 
-  const multi2 = await prisma.multiplayerMatch.findFirst({
+  const finished3 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished', 120_000);
+  await readyUpQueuedRound(trio, loading3);
+  await surrenderAll(trio);
+  const result3 = await finished3;
+
+  check('DNF ทั้งห้องแล้วยังบันทึกผลได้ ไม่พัง (ADR-041 ข้อ 3)', result3 !== null);
+  check(
+    'ห้อง auto ที่คะแนนเท่ากันแล้วเสมอทั้งห้อง → ทุกคนได้อันดับ 1 และ Elo ขยับ 0 แต้ม',
+    result3?.results.every((entry) => entry.rankNo === 1 && entry.eloChange === 0) === true,
+    result3?.results.map((entry) => [entry.username, entry.rankNo, entry.eloChange]),
+  );
+
+  const multi3 = await prisma.multiplayerMatch.findFirst({
     orderBy: { multiplayerMatchId: 'desc' },
     include: { participants: true },
   });
-  check('room_mode = CUSTOM', multi2?.roomMode === RoomMode.CUSTOM, multi2?.roomMode);
-  check('player_count = 3', multi2?.playerCount === 3, multi2?.playerCount);
-  check('โหมด custom เก็บรหัสห้องไว้', multi2?.roomCode === room2.roomCode, multi2?.roomCode);
+  check('player_count = 3 ตามจำนวนคนที่คิวจับมาได้จริง', multi3?.playerCount === 3, multi3?.playerCount);
+  check('room_mode = AUTO', multi3?.roomMode === RoomMode.AUTO, multi3?.roomMode);
   check(
-    'participant: elo_before / elo_change เป็น NULL ทั้งหมด',
-    multi2?.participants.every((row) => row.eloBefore === null && row.eloChange === null) === true,
-    multi2?.participants.map((row) => [row.userId, row.eloBefore, row.eloChange]),
-  );
-  check(
-    'participant: SURRENDERED และเวลาเป็น NULL ทุกแถว',
-    multi2?.participants.every(
-      (row) => row.result === SolveResult.SURRENDERED && row.solveTime === null,
+    'ไม่มีผู้ชนะเมื่อ DNF ทั้งห้อง — ทุก participant ได้อันดับ 1 และเป็น SURRENDERED',
+    multi3?.participants.every(
+      (row) => row.rankNo === 1 && row.result === SolveResult.SURRENDERED,
     ) === true,
-    multi2?.participants.map((row) => [row.result, row.solveTime?.toString()]),
+    multi3?.participants.map((row) => [row.userId, row.rankNo, row.result]),
   );
 
-  const after2 = new Map(
-    await Promise.all(
-      trio.map(async (player) => [player.userId, (await ratingOf(player.userId))!] as const),
-    ),
-  );
+  const after3 = await ratingSnapshot(trio);
   check(
-    'Rating: ไม่มีใครได้อันดับ 1 คนเดียว → draws +1 ทุกคน และ elo ไม่ขยับ',
+    'Rating: เสมอทั้งห้อง → draws +1 ทุกคน และ elo ไม่ขยับ',
     trio.every(
       (player) =>
-        after2.get(player.userId)!.draws === after1.get(player.userId)!.draws + 1 &&
-        after2.get(player.userId)!.eloRating === after1.get(player.userId)!.eloRating,
+        after3.get(player.userId)!.draws === beforeTrio.get(player.userId)!.draws + 1 &&
+        after3.get(player.userId)!.eloRating === BASELINE_ELO,
     ),
     trio.map((player) => [
       player.name,
-      after2.get(player.userId)!.draws,
-      after2.get(player.userId)!.eloRating,
+      after3.get(player.userId)!.draws,
+      after3.get(player.userId)!.eloRating,
     ]),
   );
+
+  alice.socket.removeAllListeners('room:state');
+  await leaveRoomAll(trio);
+
+  // ---------------------------------------------------------------- รอบที่ 4
+  console.log('\nรอบที่ 4 — ห้องสร้างเอง 3 คน: โหมด custom ไม่ปรับคะแนน · ปิดผู้ชม · ห้องเต็ม');
+  const created = await emit<{ roomId: number; roomCode: string }>(alice.socket, 'room:create', {
+    cubeType: CUBE_TYPE,
+    kind: 'multiplayer',
+    maxPlayers: 3,
+  });
   check(
-    'Rating: ห้อง custom ก็ยังนับ matches_played',
+    'room:create ที่ kind = multiplayer เปิดให้ผู้ใช้จริงแล้ว (ไม่ต้องมีสวิตช์ทดสอบ)',
+    created.ok,
+    created,
+  );
+  if (!created.ok) throw new Error('สร้างห้องหลายคนไม่ได้');
+  const roomCode = created.data.roomCode;
+
+  const badSize = await emit(eve.socket, 'room:create', {
+    cubeType: CUBE_TYPE,
+    kind: 'multiplayer',
+    maxPlayers: 2,
+  });
+  check(
+    'ห้องหลายคนที่ขอ 2 คน → E_VALIDATION (kind กับ maxPlayers ต้องเข้าคู่กัน)',
+    !badSize.ok && badSize.error.code === 'E_VALIDATION',
+    badSize,
+  );
+
+  await emit(bob.socket, 'room:join', { roomCode, as: 'player' });
+  const startEarly = await emit(alice.socket, 'room:start', {});
+  check(
+    'host กดเริ่มตอนคนยังไม่ครบ → E_INVALID_STATE (game-rules.md ข้อ 9)',
+    !startEarly.ok && startEarly.error.code === 'E_INVALID_STATE',
+    startEarly,
+  );
+
+  const asSpectator = await emit(eve.socket, 'room:join', { roomCode, as: 'spectator' });
+  check(
+    'ห้องผู้เล่นหลายคนไม่รองรับผู้ชม → E_INVALID_STATE (game-rules.md ข้อ 9)',
+    !asSpectator.ok && asSpectator.error.code === 'E_INVALID_STATE',
+    asSpectator,
+  );
+
+  await emit(chai.socket, 'room:join', { roomCode, as: 'player' });
+  const roomFull = await emit(eve.socket, 'room:join', { roomCode, as: 'player' });
+  check(
+    'เข้าห้องที่ผู้เล่นครบแล้ว → E_ROOM_FULL',
+    !roomFull.ok && roomFull.error.code === 'E_ROOM_FULL',
+    roomFull,
+  );
+
+  const finished4 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished', 120_000);
+  await startRound(alice.socket, bob.socket, chai.socket);
+  await surrenderAll(trio);
+  const result4 = await finished4;
+
+  check('ห้องสร้างเอง 3 คนเล่นจนจบได้', result4 !== null);
+  check('โหมด custom ไม่ปรับคะแนน (ratingApplied = false)', result4?.ratingApplied === false);
+  check(
+    'โหมด custom: elo ทั้งสามช่องเป็น null ทุกคน',
+    result4?.results.every(
+      (entry) => entry.eloBefore === null && entry.eloAfter === null && entry.eloChange === null,
+    ) === true,
+    result4?.results.map((entry) => [entry.username, entry.eloChange]),
+  );
+
+  const multi4 = await prisma.multiplayerMatch.findFirst({
+    orderBy: { multiplayerMatchId: 'desc' },
+    include: { participants: true },
+  });
+  check('room_mode = CUSTOM', multi4?.roomMode === RoomMode.CUSTOM, multi4?.roomMode);
+  check('player_count = 3', multi4?.playerCount === 3, multi4?.playerCount);
+  check('โหมด custom เก็บรหัสห้องไว้', multi4?.roomCode === roomCode, multi4?.roomCode);
+  check(
+    'participant: elo_before / elo_change เป็น NULL ทั้งหมด',
+    multi4?.participants.every((row) => row.eloBefore === null && row.eloChange === null) === true,
+    multi4?.participants.map((row) => [row.userId, row.eloBefore, row.eloChange]),
+  );
+  check(
+    'participant: SURRENDERED และเวลาเป็น NULL ทุกแถว',
+    multi4?.participants.every(
+      (row) => row.result === SolveResult.SURRENDERED && row.solveTime === null,
+    ) === true,
+    multi4?.participants.map((row) => [row.result, row.solveTime?.toString()]),
+  );
+
+  const after4 = await ratingSnapshot(trio);
+  check(
+    'Rating: ห้อง custom ไม่ขยับ elo แต่ยังนับ matches_played กับ draws',
     trio.every(
       (player) =>
-        after2.get(player.userId)!.matchesPlayed ===
-        after1.get(player.userId)!.matchesPlayed + 1,
+        after4.get(player.userId)!.eloRating === after3.get(player.userId)!.eloRating &&
+        after4.get(player.userId)!.matchesPlayed ===
+          after3.get(player.userId)!.matchesPlayed + 1 &&
+        after4.get(player.userId)!.draws === after3.get(player.userId)!.draws + 1,
     ),
+    trio.map((player) => [
+      player.name,
+      after4.get(player.userId)!.eloRating,
+      after4.get(player.userId)!.matchesPlayed,
+    ]),
   );
 
   // ---------------------------------------------------------------- เก็บกวาด
-  for (const player of players) {
-    await emit(player.socket, 'room:leave', {});
-    player.socket.close();
-  }
+  await leaveRoomAll(trio);
+  await sleep(200);
+  for (const player of players) player.socket.close();
 
   const code = summary();
   await prisma.$disconnect();

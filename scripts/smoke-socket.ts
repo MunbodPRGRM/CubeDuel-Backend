@@ -160,17 +160,25 @@ async function main(): Promise<void> {
     badMultiSize,
   );
 
-  const badRoomMode = await emit(alice, 'room:create', {
+  // ห้องที่สร้างด้วยรหัสเป็นโหมด custom (ไม่ปรับคะแนน) เสมอ — ส่ง roomMode มาเองก็ไม่มีผล
+  // เพราะฟิลด์นี้ไม่มีในสัญญาแล้ว โหมด auto มาจากคิวจับคู่ทางเดียว (ADR-043 ข้อ 5)
+  const forcedMode = await emit<{ roomId: number; roomCode: string }>(alice, 'room:create', {
     cubeType: '3x3x3',
-    kind: 'custom',
-    maxPlayers: 2,
+    kind: 'multiplayer',
+    maxPlayers: 3,
     roomMode: 'auto',
   });
+  const forcedSnapshot = forcedMode.ok
+    ? await emit<{ snapshot: { roomMode: string | null } }>(alice, 'room:rejoin', {
+        roomId: forcedMode.data.roomId,
+      })
+    : null;
   check(
-    'ระบุ roomMode เองในห้อง 1v1 ไม่ได้ (โหมด auto มาจากคิวเท่านั้น) → E_VALIDATION',
-    !badRoomMode.ok && badRoomMode.error.code === 'E_VALIDATION',
-    badRoomMode,
+    'client ยัด roomMode: auto มาเองไม่ได้ — ห้องที่สร้างด้วยรหัสเป็นโหมด custom เสมอ',
+    forcedSnapshot?.ok === true && forcedSnapshot.data.snapshot.roomMode === 'custom',
+    forcedSnapshot,
   );
+  await emit(alice, 'room:leave', {});
 
   const created = await emit<{ roomId: number; roomCode: string }>(alice, 'room:create', {
     cubeType: '3x3x3',

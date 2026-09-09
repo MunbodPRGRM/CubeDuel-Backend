@@ -18,6 +18,7 @@ import {
   INSPECTION_MS,
   LOADING_TIMEOUT_MS,
   MAX_LATENCY_COMPENSATION_MS,
+  MULTIPLAYER_ROOM_MIN,
   PROGRESS_INTERVAL_MS,
 } from '../constants.js';
 import { replaySolve } from '../lib/cube-state.js';
@@ -56,6 +57,14 @@ function isRatedRoom(room: Room): boolean {
   return room.roomKind === 'multiplayer' && room.roomMode === 'auto';
 }
 
+/**
+ * ห้องที่ **เกิดจากคิวจับคู่** — ไม่มีรหัสห้อง ไม่มี host จริง และ server เริ่มให้เอง
+ * (ห้องแข่งขัน 1v1 + ห้องหลายคนโหมด auto — ADR-039 ข้อ 5 · ADR-043 ข้อ 4)
+ */
+function isQueueRoom(room: Room): boolean {
+  return isRatedRoom(room);
+}
+
 /** ผู้เล่นที่ยังไม่จบ (ยังหมุนอยู่) */
 function stillSolving(room: Room): RoomPlayer[] {
   return room.stillSolving();
@@ -73,8 +82,8 @@ export async function startMatch(io: TypedServer, room: Room, userId: number): P
    * (ADR-039 ข้อ 5) · ยกเว้นบนเครื่อง dev ที่เปิดสวิตช์ทดสอบไว้ ซึ่งสร้างห้องแข่งขันเองได้อยู่แล้ว
    * และ `npm run smoke:rated` ใช้ทางนี้ (ADR-038 ข้อ 5) — production ปิดตายทั้งสองทาง
    */
-  if (room.roomKind === 'competitive' && !env.allowTestCompetitiveRoom) {
-    throw socketErrors.invalidState('ห้องแข่งขันเริ่มให้อัตโนมัติ กดเริ่มเองไม่ได้');
+  if (isQueueRoom(room) && !env.allowTestCompetitiveRoom) {
+    throw socketErrors.invalidState('ห้องที่จับคู่อัตโนมัติเริ่มให้เอง กดเริ่มเองไม่ได้');
   }
   if (!room.isHost(userId)) throw socketErrors.notHost('เฉพาะหัวห้องเท่านั้นที่กดเริ่มได้');
   if (room.state !== 'WAITING' && room.state !== 'FINISHED') {
@@ -88,7 +97,10 @@ export async function startMatch(io: TypedServer, room: Room, userId: number): P
  * ผู้เรียกเป็นคนตรวจ state ที่ตัวเองยอมรับมาก่อน ที่นี่ตรวจแค่ความพร้อมของผู้เล่น
  */
 export async function beginLoading(io: TypedServer, room: Room): Promise<void> {
-  if (!room.isFull) throw socketErrors.invalidState('ต้องมีผู้เล่นครบก่อนจึงจะเริ่มได้');
+  // ห้องที่ host กดเริ่มเองต้องครบตามที่ตั้งไว้ · ห้องหลายคนจากคิวเริ่มด้วย 3 คนได้ (ADR-041 ข้อ 3)
+  if (room.players.size < room.minPlayersToStart) {
+    throw socketErrors.invalidState('ต้องมีผู้เล่นครบก่อนจึงจะเริ่มได้');
+  }
   if ([...room.players.values()].some((player) => player.sockets.size === 0)) {
     throw socketErrors.invalidState('มีผู้เล่นหลุดการเชื่อมต่ออยู่ รอให้กลับมาก่อน');
   }
@@ -367,6 +379,17 @@ function markDnf(io: TypedServer, room: Room, player: RoomPlayer, reason: DnfRea
 // ---------------------------------------------------------------- หลุดการเชื่อมต่อ
 
 /**
+ * มีคนหลุดออกจากห้องหลายคนตอน `LOADING` แล้วคนที่เหลือแจ้งพร้อมครบไปแล้ว
+ * — ต้องเดินหน้าต่อเอง ไม่งั้นห้องจะค้างรอ `solve:ready` ของคนที่ไม่อยู่แล้วจนหมด 15 วินาที
+ */
+function resumeAfterPlayerLeft(io: TypedServer, room: Room): void {
+  if (room.state !== 'LOADING') return;
+  if (![...room.players.values()].every((player) => player.loaded)) return;
+  room.clearPhaseTimer();
+  beginCountdown(io, room);
+}
+
+/**
  * socket ตัวสุดท้ายของผู้เล่นหลุด — เริ่มนับ grace 30 วินาที (game-rules.md ข้อ 6)
  * เรียกจากตัวจัดการ `disconnect` เท่านั้น (ไม่ได้เรียกจาก `room-service` เพื่อไม่ให้ import วน)
  */
@@ -396,7 +419,13 @@ export function beginDisconnectGrace(io: TypedServer, room: Room, userId: number
         case 'LOADING':
         case 'COUNTDOWN':
         case 'INSPECTION':
-          // ยังไม่เริ่มจับเวลา → ยุบห้อง ไม่บันทึก DB ไม่ปรับ Elo
+          // ยังไม่เริ่มจับเวลา — ห้องหลายคนที่ยังเหลือถึงขั้นต่ำเล่นต่อได้ (ADR-041 ข้อ 3)
+          if (room.roomKind === 'multiplayer' && room.players.size - 1 >= MULTIPLAYER_ROOM_MIN) {
+            removePlayerFromRoom(io, room, userId, 'disconnected');
+            resumeAfterPlayerLeft(io, room);
+            return;
+          }
+          // เหลือน้อยกว่าขั้นต่ำ (หรือเป็นห้อง 1v1) → ยุบห้อง ไม่บันทึก DB ไม่ปรับ Elo
           abortRoom(
             io,
             room,

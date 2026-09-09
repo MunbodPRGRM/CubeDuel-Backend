@@ -15,6 +15,17 @@ export const netPingSchema = z.object({
   lastRttMs: z.number().int().nonnegative().optional(),
 });
 
+export const queueJoinSchema = z.object({
+  cubeType: z.enum(CUBE_TYPES),
+  /** คิวห้องผู้เล่นหลายคนเป็นงานเฟส 6 — ปฏิเสธตั้งแต่ชั้น schema (ADR-039 ข้อ 9) */
+  kind: z
+    .enum(['competitive', 'multiplayer'])
+    .default('competitive')
+    .refine((kind) => kind !== 'multiplayer', {
+      message: 'คิวห้องผู้เล่นหลายคนยังไม่เปิด (เฟส 6)',
+    }),
+});
+
 export const roomCreateSchema = z.object({
   cubeType: z.enum(CUBE_TYPES),
   /**

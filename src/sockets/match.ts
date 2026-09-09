@@ -20,15 +20,11 @@ import {
   PROGRESS_INTERVAL_MS,
 } from '../constants.js';
 import { replaySolve } from '../lib/cube-state.js';
-import { newRating } from '../lib/elo.js';
+import { duelEloChanges } from '../lib/elo.js';
 import { isAllowedMove } from '../lib/moves.js';
+import { assignRanks, findWinnerId } from '../lib/ranking.js';
 import { generateScrambles } from '../services/scramble.service.js';
-import {
-  assignRanks,
-  findWinnerId,
-  saveMatch,
-  type MatchPlayerOutcome,
-} from '../services/match.service.js';
+import { saveMatch, type MatchPlayerOutcome } from '../services/match.service.js';
 import type { TypedServer, TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import type { Room, RoomPlayer } from './room.js';
@@ -418,28 +414,21 @@ function toOutcome(
   };
 }
 
-/** Elo 1v1 (K = 32) — ห้องสร้างเองไม่ปรับคะแนน คืน `null` ทั้งคู่ */
+/** Elo 1v1 (K = 32) — ห้องที่ไม่ปรับคะแนนคืน `null` ทั้งคู่ (CLAUDE.md ข้อ 7) */
 function eloChanges(room: Room, ranks: Map<number, number>): Map<number, number | null> {
   const players = [...room.players.values()];
-  const changes = new Map<number, number | null>();
-  if (!isRatedRoom(room) || players.length !== 2) {
-    for (const player of players) changes.set(player.userId, null);
-    return changes;
+  const [first, second] = players;
+  if (!isRatedRoom(room) || players.length !== 2 || !first || !second) {
+    return new Map(players.map((player) => [player.userId, null]));
   }
 
-  const [first, second] = players;
-  const pairs: [RoomPlayer, RoomPlayer][] = [
-    [first!, second!],
-    [second!, first!],
-  ];
-  for (const [self, opponent] of pairs) {
-    const selfRank = ranks.get(self.userId)!;
-    const opponentRank = ranks.get(opponent.userId)!;
-    // DNF ทั้งคู่ = อันดับเท่ากัน = เสมอ (S = 0.5 ทั้งคู่ — ADR-007)
-    const score = selfRank === opponentRank ? 0.5 : selfRank < opponentRank ? 1 : 0;
-    changes.set(self.userId, newRating(self.eloRating, opponent.eloRating, score) - self.eloRating);
-  }
-  return changes;
+  // สูตรและเคสเสมอทั้งหมดอยู่ใน `lib/elo.ts` (มี unit test คุมอยู่) — ที่นี่แค่แปลงห้องให้
+  return new Map<number, number | null>(
+    duelEloChanges([
+      { userId: first.userId, eloRating: first.eloRating, rankNo: ranks.get(first.userId)! },
+      { userId: second.userId, eloRating: second.eloRating, rankNo: ranks.get(second.userId)! },
+    ]),
+  );
 }
 
 /**
@@ -484,7 +473,8 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
         roomType: isRatedRoom(room) ? 'COMPETITIVE' : 'CUSTOM',
         cubeType: room.cubeType,
         scramble: room.scramble,
-        roomCode: room.roomCode,
+        // ห้องแข่งขันไม่มีรหัสห้อง (คอลัมน์นี้มีความหมายเฉพาะห้องสร้างเอง — database-schema.md)
+        roomCode: isRatedRoom(room) ? null : room.roomCode,
         spectatorCount: room.peakSpectatorCount,
         startedAtTs: room.serverStartTs ?? finishedAtTs,
         finishedAtTs,

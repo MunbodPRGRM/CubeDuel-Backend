@@ -9,107 +9,22 @@
  *       เห็น move คู่แข่ง · ยอมแพ้ · บันทึก DB + ตัวเลขสรุปใน Rating · เล่นซ้ำในห้องเดิม
  */
 import { PrismaClient } from '@prisma/client';
-import { Alg } from 'cubing/alg';
-import { io, type Socket } from 'socket.io-client';
+import {
+  check,
+  connect,
+  emit,
+  login,
+  sendMoves,
+  SERVER_URL,
+  solutionMoves,
+  summary,
+  waitFor,
+  type SmokeMatchResult,
+} from './smoke-helpers.js';
 
-const SERVER_URL = process.env.SMOKE_SERVER_URL ?? 'http://localhost:4000';
-const API = `${SERVER_URL}/api/v1`;
-const SEED_PASSWORD = 'Password123!';
 const CUBE_TYPE = '2x2x2';
 
 const prisma = new PrismaClient();
-let passed = 0;
-let failed = 0;
-
-function check(label: string, ok: boolean, detail?: unknown): void {
-  if (ok) {
-    passed++;
-    console.log(`  ✅ ${label}`);
-  } else {
-    failed++;
-    console.log(`  ❌ ${label}`, detail === undefined ? '' : detail);
-  }
-}
-
-type Ack<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
-
-async function login(identifier: string): Promise<{ token: string; userId: number }> {
-  const res = await fetch(`${API}/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier, password: SEED_PASSWORD }),
-  });
-  const body = (await res.json()) as {
-    data?: { accessToken: string; user: { userId: number } };
-  };
-  if (!body.data) throw new Error(`เข้าสู่ระบบ ${identifier} ไม่ผ่าน`);
-  return { token: body.data.accessToken, userId: body.data.user.userId };
-}
-
-function connect(token: string): Promise<Socket> {
-  const socket = io(SERVER_URL, { auth: { token }, transports: ['websocket'] });
-  return new Promise((resolve, reject) => {
-    socket.once('connect', () => resolve(socket));
-    socket.once('connect_error', reject);
-  });
-}
-
-function emit<T>(socket: Socket, event: string, payload: unknown): Promise<Ack<T>> {
-  return new Promise((resolve) => socket.emit(event, payload, resolve));
-}
-
-function waitFor<T>(socket: Socket, event: string, timeoutMs = 30_000): Promise<T | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      socket.off(event, listener);
-      resolve(null);
-    }, timeoutMs);
-    const listener = (payload: T) => {
-      clearTimeout(timer);
-      socket.off(event, listener);
-      resolve(payload);
-    };
-    socket.on(event, listener);
-  });
-}
-
-/**
- * ท่าที่ทำให้คิวบ์กลับมาแก้เสร็จ = ย้อน scramble
- * cubing.js เขียน 180° ตอน invert เป็น `U2'` แต่บนสายส่งรับแค่ `U2` (game-rules.md ข้อ 11)
- */
-function solutionMoves(scramble: string): string[] {
-  return new Alg(scramble)
-    .invert()
-    .toString()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((move) => move.replace(/2'$/, '2'));
-}
-
-/**
- * ส่ง move ทีละท่าแบบที่ client จริงทำ (fire-and-forget)
- * `gapMs` = เว้นช่วงระหว่างท่าเหมือนคนหมุนจริง — ใส่ 0 เมื่อจงใจให้เข้าเกณฑ์ soft ของ anti-cheat
- */
-async function sendMoves(socket: Socket, moves: string[], gapMs = 0): Promise<void> {
-  for (const [index, move] of moves.entries()) {
-    socket.emit('solve:move', { seq: index + 1, move, clientTs: Date.now() });
-    if (gapMs > 0) await new Promise((resolve) => setTimeout(resolve, gapMs));
-  }
-}
-
-interface MatchResult {
-  matchId: number | null;
-  ratingApplied: boolean;
-  scramble: string;
-  results: {
-    userId: number;
-    username: string;
-    solveTimeMs: number | null;
-    moveCount: number;
-    rankNo: number;
-    eloChange: number | null;
-  }[];
-}
 
 async function main(): Promise<void> {
   console.log(`\n🎮 ทดสอบแมตช์เต็มรูปแบบที่ ${SERVER_URL} (${CUBE_TYPE})\n`);
@@ -120,6 +35,13 @@ async function main(): Promise<void> {
 
   // ตั้งค่า RTT ให้ server รู้ (ใช้ชดเชยเวลาตอนตัดสิน)
   await emit(aliceSocket, 'net:ping', { clientTs: Date.now(), lastRttMs: 20 });
+
+  // อ่านคะแนนไว้ก่อน — ห้องสร้างเองต้องไม่ทำให้ตัวเลขนี้ขยับ (ค่าจริงขึ้นกับว่าเคยรัน smoke:rated มาก่อนไหม)
+  const eloBeforeAll = (
+    await prisma.rating.findUnique({
+      where: { userId_cubeType: { userId: alice.userId, cubeType: 'CUBE_2X2X2' } },
+    })
+  )?.eloRating;
 
   const created = await emit<{ roomId: number; roomCode: string }>(aliceSocket, 'room:create', {
     cubeType: CUBE_TYPE,
@@ -253,7 +175,7 @@ async function main(): Promise<void> {
     finalPayload,
   );
 
-  const finished = waitFor<MatchResult>(aliceSocket, 'match:finished');
+  const finished = waitFor<SmokeMatchResult>(aliceSocket, 'match:finished');
   // bob หมุนด้วยจังหวะเท่าคนจริง (~8 move/วินาที) — ต้องไม่โดน flag และเวลาต้องตรงกับที่ผ่านไปจริง
   await sendMoves(bobSocket, moves, 120);
   const bobSolved = await emit<{ rankNo: number; solveTimeMs: number }>(bobSocket, 'solve:solved', {
@@ -347,9 +269,9 @@ async function main(): Promise<void> {
     where: { userId_cubeType: { userId: alice.userId, cubeType: 'CUBE_2X2X2' } },
   });
   check(
-    'Rating: best_time ถูกเซ็ตแล้ว และ elo ยังเท่าเดิม 1000',
-    aliceRating?.bestTime !== null && aliceRating?.eloRating === 1000,
-    { bestTime: aliceRating?.bestTime?.toString(), elo: aliceRating?.eloRating },
+    'Rating: best_time ถูกเซ็ตแล้ว และ elo ไม่ขยับเลย (ห้องสร้างเองไม่ปรับคะแนน)',
+    aliceRating?.bestTime !== null && aliceRating?.eloRating === eloBeforeAll,
+    { bestTime: aliceRating?.bestTime?.toString(), elo: aliceRating?.eloRating, eloBeforeAll },
   );
 
   // ---------------------------------------------------------------- รอบที่ 2
@@ -367,7 +289,7 @@ async function main(): Promise<void> {
   await waitFor(aliceSocket, 'match:started');
 
   const dnfEvent = waitFor<{ userId: number; reason: string }>(aliceSocket, 'player:dnf');
-  const finished2 = waitFor<MatchResult>(aliceSocket, 'match:finished');
+  const finished2 = waitFor<SmokeMatchResult>(aliceSocket, 'match:finished');
   const surrendered = await emit(bobSocket, 'solve:surrender', {});
   check('ยอมแพ้ได้', surrendered.ok, surrendered);
   check('ทั้งห้องเห็น player:dnf reason = surrender', (await dnfEvent)?.reason === 'surrender');
@@ -430,7 +352,7 @@ async function main(): Promise<void> {
     disconnectEvent,
   );
 
-  const finished3 = waitFor<MatchResult>(aliceSocket, 'match:finished', 20_000);
+  const finished3 = waitFor<SmokeMatchResult>(aliceSocket, 'match:finished', 20_000);
   await sendMoves(aliceSocket, solutionMoves(round3!.scramble), 120);
   await emit(aliceSocket, 'solve:solved', {
     seq: solutionMoves(round3!.scramble).length,
@@ -466,9 +388,9 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------- เก็บกวาด
   await emit(aliceSocket, 'room:leave', {});
   aliceSocket.close();
-  console.log(`\nสรุป: ผ่าน ${passed} · ไม่ผ่าน ${failed} (ห้อง ${roomId})\n`);
+  const code = summary(`(ห้อง ${roomId})`);
   await prisma.$disconnect();
-  process.exit(failed === 0 ? 0 : 1);
+  process.exit(code);
 }
 
 main().catch(async (error: unknown) => {

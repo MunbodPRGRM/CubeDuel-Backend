@@ -3,6 +3,7 @@
  * รูป payload ต้องตรงกับ `docs/socket-events.md` (แก้เอกสารก่อนเสมอ)
  */
 import { z } from 'zod';
+import { env } from '../config/env.js';
 import { CUBE_TYPES } from '../types/cube.js';
 
 /** payload ที่ไม่มีฟิลด์อะไรเลย — client บางตัวส่ง `undefined` มา จึงใส่ค่าเริ่มต้นให้ */
@@ -16,10 +17,20 @@ export const netPingSchema = z.object({
 
 export const roomCreateSchema = z.object({
   cubeType: z.enum(CUBE_TYPES),
-  // ห้องหลายคน (`multiplayer`, 3–4 คน) เป็นงานเฟส 6 — ตอนนี้ปฏิเสธตั้งแต่ชั้น schema (ADR-034 ข้อ 10)
-  kind: z.enum(['custom', 'multiplayer']).refine((kind) => kind === 'custom', {
-    message: 'ตอนนี้เปิดใช้เฉพาะห้องสร้างเอง 1v1 (ห้องผู้เล่นหลายคนยังไม่เปิด)',
-  }),
+  /**
+   * ห้องหลายคน (`multiplayer`, 3–4 คน) เป็นงานเฟส 6 — ปฏิเสธตั้งแต่ชั้น schema (ADR-034 ข้อ 10)
+   *
+   * `competitive` ปกติมาจากคิวจับคู่เท่านั้น สร้างเองได้เฉพาะตอนเปิดสวิตช์ทดสอบ
+   * `ALLOW_TEST_COMPETITIVE_ROOM=1` บนเครื่อง dev (ADR-038) — production ปิดตาย
+   */
+  kind: z
+    .enum(['custom', 'multiplayer', 'competitive'])
+    .refine((kind) => kind === 'custom' || env.allowTestCompetitiveRoom, {
+      message: 'ตอนนี้เปิดใช้เฉพาะห้องสร้างเอง 1v1 (ห้องผู้เล่นหลายคนยังไม่เปิด)',
+    })
+    .refine((kind) => kind !== 'multiplayer', {
+      message: 'ห้องผู้เล่นหลายคนยังไม่เปิด (เฟส 6)',
+    }),
   maxPlayers: z.literal(2, { message: 'ห้องสร้างเองรองรับ 2 คนเท่านั้น' }),
 });
 

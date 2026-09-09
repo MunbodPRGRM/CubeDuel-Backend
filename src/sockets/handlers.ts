@@ -58,11 +58,13 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
   on(socket, 'room:create', roomCreateSchema, async (socket, payload) => {
     leavePreviousRoom(io, socket);
     const room = createRoom({
-      roomKind: 'custom',
+      // `competitive` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038)
+      roomKind: payload.kind === 'competitive' ? 'competitive' : 'custom',
       // roomMode มีความหมายเฉพาะห้องผู้เล่นหลายคน — ห้อง 1v1 เป็น null เสมอ
       roomMode: null,
       cubeType: payload.cubeType,
       maxPlayers: payload.maxPlayers,
+      // ห้องแข่งขันจริงไม่มีรหัส แต่ห้องทดสอบต้องมี ไม่งั้นอีกฝั่งเข้าไม่ได้
       withCode: true,
     });
     await joinAsPlayer(io, socket, room);

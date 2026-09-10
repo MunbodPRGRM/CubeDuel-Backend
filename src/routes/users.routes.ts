@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { currentUser, requireAuth } from '../middleware/auth.js';
 import { asyncHandler } from '../middleware/async-handler.js';
-import { queryOf, validateQuery } from '../middleware/validate.js';
+import { queryOf, validateBody, validateQuery } from '../middleware/validate.js';
 import { userIdParamSchema } from '../schemas/leaderboard.schema.js';
 import {
   matchHistoryQuerySchema,
@@ -9,9 +9,10 @@ import {
   type MatchHistoryQueryInput,
   type UserStatsQueryInput,
 } from '../schemas/stats.schema.js';
+import { updateProfileSchema, type UpdateProfileInput } from '../schemas/user.schema.js';
 import { getUserRatings } from '../services/leaderboard.service.js';
 import { getUserMatchHistory, getUserStats } from '../services/stats.service.js';
-import { getPublicProfile } from '../services/user.service.js';
+import { getPublicProfile, updateOwnProfile } from '../services/user.service.js';
 import { toSelfUser } from '../types/api.js';
 
 export const usersRouter = Router();
@@ -20,6 +21,17 @@ export const usersRouter = Router();
 usersRouter.get('/me', requireAuth, (req, res) => {
   res.json({ data: toSelfUser(currentUser(req)) });
 });
+
+/** แก้ชื่อเล่น / สกินสีคิวบ์ของตัวเอง (api-contract.md ข้อ 3) */
+usersRouter.patch(
+  '/me',
+  requireAuth,
+  validateBody(updateProfileSchema),
+  asyncHandler(async (req, res) => {
+    const input = req.body as UpdateProfileInput;
+    res.json({ data: await updateOwnProfile(currentUser(req).userId, input) });
+  }),
+);
 
 /**
  * สถิติของผู้ใช้คนหนึ่งในประเภทรูบิคหนึ่ง (api-contract.md ข้อ 4)
@@ -63,5 +75,3 @@ usersRouter.get(
     res.json({ data: await getPublicProfile(userId) });
   }),
 );
-
-// TODO(เฟส 8): PATCH /me (nickname, cubeSkin)

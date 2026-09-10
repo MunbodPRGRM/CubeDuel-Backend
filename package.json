@@ -20,6 +20,7 @@
     "smoke:queue": "tsx scripts/smoke-queue.ts",
     "smoke:multi": "tsx scripts/smoke-multi.ts",
     "smoke:stats": "tsx scripts/smoke-stats.ts",
+    "smoke:profile": "tsx scripts/smoke-profile.ts",
     "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },
   "dependencies": {

@@ -190,6 +190,9 @@ async function buildFixture(): Promise<Fixture> {
         player2Time: dec(s.theirs),
         player1Result: s.mine === null ? SolveResult.DNF : SolveResult.SOLVED,
         player2Result: SolveResult.SOLVED,
+        // จำนวน move ของฉันคงที่ทุกแมตช์ เพื่อให้ยืนยัน `moveCount` ในประวัติได้ (ADR-047 ข้อ 1)
+        player1MoveCount: 60,
+        player2MoveCount: 72,
         player1EloBefore: s.rated ? 1000 : null,
         player2EloBefore: s.rated ? 1000 : null,
         player1EloChange: s.elo,
@@ -214,7 +217,7 @@ async function buildFixture(): Promise<Fixture> {
       finishedAt: new Date(week.start.getTime() + 2 * HOUR),
       participants: {
         create: [
-          { userId: me, solveTime: dec(11), result: SolveResult.SOLVED, rankNo: 1, eloBefore: 1000, eloChange: 12 },
+          { userId: me, solveTime: dec(11), result: SolveResult.SOLVED, rankNo: 1, eloBefore: 1000, eloChange: 12, moveCount: 74 },
           { userId: userIds.pimchanok, solveTime: dec(18), result: SolveResult.SOLVED, rankNo: 2, eloBefore: 1000, eloChange: -4 },
           { userId: userIds.nattapong, solveTime: null, result: SolveResult.DNF, rankNo: 3, eloBefore: 1000, eloChange: -8 },
         ],
@@ -274,6 +277,7 @@ async function checkStats(me: number): Promise<void> {
 interface HistoryRow {
   kind: '1v1' | 'multiplayer';
   myTime: number | null;
+  moveCount: number | null;
   roomType?: string;
   roomMode?: string;
   result: string;
@@ -294,6 +298,9 @@ async function checkHistory(me: number): Promise<void> {
     times,
   );
   check('แมตช์ที่ 2 มาจากห้องหลายคน', all.data?.[1]?.kind === 'multiplayer', all.data?.[1]?.kind);
+  // `moveCount` ต้องเป็นของ **ผู้ใช้ในพาธ** ไม่ใช่ของคู่ต่อสู้ (fixture ตั้งไว้ 60 กับ 72)
+  check('moveCount ของ 1v1 เป็นของตัวเอง', all.data?.[0]?.moveCount === 60, all.data?.[0]?.moveCount);
+  check('moveCount ของห้องหลายคนมาด้วย', all.data?.[1]?.moveCount === 74, all.data?.[1]?.moveCount);
   check('แมตช์ที่ 1 เป็น 1v1 ห้องแข่งขัน', all.data?.[0]?.roomType === 'competitive', all.data?.[0]);
 
   const multiOnly = await getJson<Paged<HistoryRow>>(

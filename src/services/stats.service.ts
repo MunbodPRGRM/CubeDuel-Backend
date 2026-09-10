@@ -55,6 +55,8 @@ export interface SolveHistoryEntry {
   scramble: string;
   /** วินาที — `null` = DNF/ยอมแพ้ (ดู `status` ควบคู่) */
   solveTime: number | null;
+  /** จำนวน move ของผู้ใช้คนนี้ — `null` = แมตช์เก่าที่ยังไม่ได้เก็บ (ADR-047 ข้อ 1) */
+  moveCount: number | null;
   status: SolveStatus;
   /** ผลของแมตช์เมื่อมองจากผู้ใช้คนนี้ — กติกาเดียวกับที่ `Rating` นับ (ADR-041 ข้อ 1) */
   outcome: MatchOutcomeForUser;
@@ -114,6 +116,7 @@ async function read1v1History(
       time: selfIsPlayer1 ? row.player1Time : row.player2Time,
       result: selfIsPlayer1 ? row.player1Result : row.player2Result,
       eloChange: selfIsPlayer1 ? row.player1EloChange : row.player2EloChange,
+      moveCount: selfIsPlayer1 ? row.player1MoveCount : row.player2MoveCount,
     };
     const other = {
       user: selfIsPlayer1 ? row.player2 : row.player1,
@@ -147,6 +150,7 @@ async function read1v1History(
       roomMode: null,
       scramble: row.scramble,
       solveTime: self.time === null ? null : self.time.toNumber(),
+      moveCount: self.moveCount,
       status: STATUS_OF[self.result],
       outcome: outcomeOf(userId, row.winnerId, rankNo),
       rankNo,
@@ -196,6 +200,7 @@ async function readMultiplayerHistory(
       roomMode: auto ? ('auto' as const) : ('custom' as const),
       scramble: row.match.scramble,
       solveTime: row.solveTime === null ? null : row.solveTime.toNumber(),
+      moveCount: row.moveCount,
       status: STATUS_OF[row.result],
       outcome: outcomeOf(userId, winnerId, row.rankNo),
       rankNo: row.rankNo,
@@ -306,6 +311,8 @@ export interface MatchHistory1v1Row {
   scramble: string;
   /** วินาที — `null` = DNF/ยอมแพ้ */
   myTime: number | null;
+  /** จำนวน move ของผู้ใช้ในพาธ — `null` = แมตช์เก่าที่ยังไม่ได้เก็บ */
+  moveCount: number | null;
   opponent: HistoryUser;
   opponentTime: number | null;
   result: MatchOutcomeForUser;
@@ -321,6 +328,7 @@ export interface MatchHistoryMultiRow {
   cubeType: ApiCubeType;
   scramble: string;
   myTime: number | null;
+  moveCount: number | null;
   rankNo: number;
   playerCount: number;
   result: MatchOutcomeForUser;
@@ -344,6 +352,7 @@ function toHistoryRow(entry: SolveHistoryEntry): MatchHistoryRow {
     cubeType: entry.cubeType,
     scramble: entry.scramble,
     myTime: entry.solveTime,
+    moveCount: entry.moveCount,
     result: entry.outcome,
     eloChange: entry.eloChange,
     startedAt: entry.startedAt.toISOString(),

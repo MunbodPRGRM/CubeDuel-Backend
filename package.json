@@ -22,6 +22,7 @@
     "smoke:stats": "tsx scripts/smoke-stats.ts",
     "smoke:profile": "tsx scripts/smoke-profile.ts",
     "smoke:news": "tsx scripts/smoke-news.ts",
+    "smoke:admin": "tsx scripts/smoke-admin.ts",
     "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },
   "dependencies": {

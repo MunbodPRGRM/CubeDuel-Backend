@@ -12,7 +12,7 @@
 /** UTC+7 — เวลาไทยเร็วกว่า UTC เท่านี้เสมอ */
 export const THAI_UTC_OFFSET_MS = 7 * 60 * 60 * 1000;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 
 export interface WeekRange {
@@ -42,6 +42,22 @@ export function weekRangeOf(now: Date = new Date()): WeekRange {
   return {
     start: new Date(startThai - THAI_UTC_OFFSET_MS),
     end: new Date(startThai + WEEK_MS - THAI_UTC_OFFSET_MS),
+  };
+}
+
+/**
+ * ช่วงของ **วันตามปฏิทินไทย** ที่ `now` ตกอยู่ — ขอบซ้ายรวม ขอบขวาไม่รวม (แดชบอร์ดแอดมินใช้)
+ *
+ * วิธีคิดเดียวกับ `weekRangeOf()` เป๊ะ ต่างแค่ไม่ต้องถอยไปหาวันจันทร์
+ * `offsetDays` = ถอยหลังกี่วัน (0 = วันนี้, 1 = เมื่อวาน) ใช้ตอนไล่นับ 7 วันย้อนหลัง
+ */
+export function thaiDayRangeOf(now: Date = new Date(), offsetDays = 0): WeekRange {
+  const thai = now.getTime() + THAI_UTC_OFFSET_MS;
+  const midnightThai = Math.floor(thai / DAY_MS) * DAY_MS - offsetDays * DAY_MS;
+
+  return {
+    start: new Date(midnightThai - THAI_UTC_OFFSET_MS),
+    end: new Date(midnightThai + DAY_MS - THAI_UTC_OFFSET_MS),
   };
 }
 

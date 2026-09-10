@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { THAI_UTC_OFFSET_MS, weekKeyOf, weekRangeOf } from './week.js';
+import { THAI_UTC_OFFSET_MS, thaiDayRangeOf, weekKeyOf, weekRangeOf } from './week.js';
 
 /** ช่วยอ่านเทสให้ตรงกับที่คนไทยเห็นบนนาฬิกา — คืนเวลา UTC ที่ตรงกับเวลาไทยที่ระบุ */
 function thai(iso: string): Date {
@@ -83,5 +83,40 @@ describe('weekKeyOf', () => {
     const b = weekKeyOf(weekRangeOf(thai('2026-09-14T00:00:00.000')));
     assert.equal(a, '2026-09-07');
     assert.equal(b, '2026-09-14');
+  });
+});
+
+/** ขอบวันของแดชบอร์ดแอดมิน (เฟส 8 ก้อนที่ 3) — กับดักเดียวกับขอบสัปดาห์ */
+describe('thaiDayRangeOf', () => {
+  it('วันไทยเริ่ม 17:00Z ของวันก่อนหน้า ไม่ใช่ 00:00Z', () => {
+    const range = thaiDayRangeOf(thai('2026-09-10T13:45:00'));
+    assert.equal(range.start.toISOString(), '2026-09-09T17:00:00.000Z');
+    assert.equal(range.end.toISOString(), '2026-09-10T17:00:00.000Z');
+  });
+
+  it('เที่ยงคืนกับหนึ่งวินาทีก่อนเที่ยงคืน (เวลาไทย) อยู่คนละวัน', () => {
+    const late = thaiDayRangeOf(thai('2026-09-10T23:59:59.999'));
+    const justAfter = thaiDayRangeOf(thai('2026-09-11T00:00:00.000'));
+    assert.equal(late.start.toISOString(), '2026-09-09T17:00:00.000Z');
+    assert.equal(justAfter.start.toISOString(), '2026-09-10T17:00:00.000Z');
+  });
+
+  it('offsetDays ถอยหลังทีละวันเต็ม', () => {
+    const today = thaiDayRangeOf(thai('2026-09-10T08:00:00'));
+    const sixDaysAgo = thaiDayRangeOf(thai('2026-09-10T08:00:00'), 6);
+    assert.equal(sixDaysAgo.start.toISOString(), '2026-09-03T17:00:00.000Z');
+    // ขอบขวาของเมื่อ 6 วันก่อน = ขอบซ้ายของ 5 วันก่อน (ต่อกันสนิท ไม่ทับ ไม่มีรู)
+    assert.equal(
+      sixDaysAgo.end.getTime(),
+      thaiDayRangeOf(thai('2026-09-10T08:00:00'), 5).start.getTime(),
+    );
+    assert.equal(today.end.getTime() - today.start.getTime(), 24 * 60 * 60 * 1000);
+  });
+
+  it('ช่วง 7 วันย้อนหลังครอบคลุมพอดี 7 วันไม่ขาดไม่เกิน', () => {
+    const now = thai('2026-09-10T08:00:00');
+    const first = thaiDayRangeOf(now, 6);
+    const last = thaiDayRangeOf(now, 0);
+    assert.equal(last.end.getTime() - first.start.getTime(), 7 * 24 * 60 * 60 * 1000);
   });
 });

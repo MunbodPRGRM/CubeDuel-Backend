@@ -5,6 +5,7 @@ import { disposeLimiter, type TypedServer, type TypedSocket } from './ack.js';
 import { authMiddleware } from './auth.js';
 import { registerHandlers } from './handlers.js';
 import { beginDisconnectGrace } from './match.js';
+import { registerSocketServer } from './presence.js';
 import { removeSocketFromQueue } from './queue.js';
 import { findExpiredRooms, ROOM_IDLE_TIMEOUT_MS } from './room-registry.js';
 import { abortRoom, leaveRoom } from './room-service.js';
@@ -26,6 +27,9 @@ export function createSocketServer(httpServer: HttpServer): TypedServer {
   });
 
   io.use((socket, next) => authMiddleware(socket as TypedSocket, next));
+
+  // แดชบอร์ดแอดมินอ่านจำนวนคนออนไลน์จากที่นี่ (ชั้น REST เข้าถึง io ตรง ๆ ไม่ได้)
+  registerSocketServer(io);
 
   io.on('connection', (socket) => {
     registerHandlers(io, socket);

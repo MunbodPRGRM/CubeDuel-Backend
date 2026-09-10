@@ -27,3 +27,6 @@ export const registerLimiter = make({ windowMs: 60 * 60_000, limit: 5 });
 
 /** endpoint auth อื่น ๆ (refresh / logout / change-password / ลบบัญชี) */
 export const authLimiter = make({ windowMs: 15 * 60_000, limit: 60 });
+
+/** แจ้งรายงานผู้เล่น 10 ครั้ง / ชั่วโมง ต่อ IP — กันสแปมจนหน้าแอดมินใช้งานไม่ได้ (api-contract.md ข้อ 8) */
+export const reportLimiter = make({ windowMs: 60 * 60_000, limit: 10 });

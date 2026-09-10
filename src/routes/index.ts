@@ -30,5 +30,5 @@ router.use('/multiplayer-matches', multiplayerMatchesRouter);
 router.use('/leaderboard', leaderboardRouter);
 router.use('/scramble', scrambleRouter);
 
-// TODO(เฟส 7): stats + leaderboard
+// TODO(เฟส 7 ก้อนที่ 2): กระดานอันดับรายสัปดาห์ (scope=weekly)
 // TODO(เฟส 8): news / reports / admin

@@ -2,13 +2,14 @@ import type { CubeType } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { errors } from '../lib/errors.js';
 import { ALL_CUBE_TYPES } from '../constants.js';
+import { winRateOf } from '../lib/stats.js';
 import { PRISMA_TO_CUBE_TYPE, type ApiCubeType } from '../types/cube.js';
 
 /**
  * กระดานอันดับ + คะแนนรายบุคคล — ที่มา: docs/api-contract.md ข้อ 3 และ ข้อ 5
  *
  * ⚠️ ทำมาก่อนกำหนด (เป็นงานเฟส 7) เพราะหน้าจอตามดีไซน์ต้องใช้ข้อมูลจริง
- *     `scope=weekly` ยังไม่ทำ — ต้องคำนวณจาก Match/MultiplayerMatchParticipant ซึ่งยังไม่มีข้อมูลจนถึงเฟส 5
+ *     `scope=weekly` ยังไม่ทำ — เป็นงานเฟส 7 ก้อนที่ 2
  */
 
 /** ตัวเลขสรุปใน Rating เป็นข้อมูลซ้ำซ้อน (ADR-014) — อ่านตรงจากตารางนี้ได้เลย ไม่ต้องนับใหม่ */
@@ -31,12 +32,6 @@ export interface LeaderboardQuery {
   sortBy: 'elo' | 'bestTime';
   page: number;
   limit: number;
-}
-
-function winRateOf(wins: number, losses: number, draws: number): number {
-  const played = wins + losses + draws;
-  if (played === 0) return 0;
-  return Number((wins / played).toFixed(4));
 }
 
 export async function getLeaderboard(q: LeaderboardQuery) {

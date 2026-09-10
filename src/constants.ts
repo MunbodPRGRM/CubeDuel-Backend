@@ -88,3 +88,15 @@ export const REFRESH_COOKIE_PATH = '/api/v1/auth';
 export const CUBE_SKINS = ['classic', 'pastel', 'neon', 'contrast'] as const;
 export type CubeSkinId = (typeof CUBE_SKINS)[number];
 export const DEFAULT_CUBE_SKIN: CubeSkinId = 'classic';
+
+/**
+ * งานเบื้องหลัง (เฟส 10 ก้อนที่ 1 — `src/jobs/`)
+ *
+ * `UNSUSPEND` ถี่กว่าเพราะกระทบสิ่งที่แอดมินมองเห็นทันที ส่วนการล้าง move log เป็นงานเก็บกวาด
+ * ที่ช้าไปครึ่งวันก็ไม่มีใครเดือดร้อน — ทั้งคู่ราคาถูก เป็น `UPDATE ... WHERE` ที่มี index รองรับ
+ */
+export const UNSUSPEND_JOB_INTERVAL_MS = 5 * 60_000;
+export const MOVE_LOG_PURGE_INTERVAL_MS = 6 * 60 * 60_000;
+
+/** เก็บ move stream ของแมตช์ที่ถูก flag ไว้เท่านี้วัน แล้วล้างเป็น NULL (game-rules.md ข้อ 10) */
+export const MOVE_LOG_RETENTION_DAYS = 90;

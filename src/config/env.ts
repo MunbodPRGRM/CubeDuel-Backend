@@ -33,6 +33,11 @@ export const env = {
   allowTestCompetitiveRoom: !isProduction && process.env.ALLOW_TEST_COMPETITIVE_ROOM === '1',
   nodeEnv,
   isProduction,
+  /**
+   * ปิดงานเบื้องหลังทั้งหมด (`src/jobs/`) — ใช้ตอนรันสโมคเทสของงานเบื้องหลังเอง
+   * จะได้ไม่มีตัวจับเวลามาแย่งทำงานที่สคริปต์กำลังจะตรวจ
+   */
+  disableMaintenanceJobs: process.env.DISABLE_MAINTENANCE_JOBS === 'true',
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   databaseUrl: required('DATABASE_URL'),
   /**

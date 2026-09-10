@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'node:path';
 
 function required(key: string): string {
   const v = process.env[key];
@@ -34,6 +35,11 @@ export const env = {
   isProduction,
   corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   databaseUrl: required('DATABASE_URL'),
+  /**
+   * โฟลเดอร์เก็บไฟล์ที่ผู้ใช้อัปโหลด (รูปข่าว) — เสิร์ฟออกทาง `/uploads` (api-contract.md ข้อ 7)
+   * ค่าเริ่มต้นอยู่ข้าง ๆ โค้ด เพราะ dev รันจาก `backend/` · ตอน deploy ให้ชี้ไป volume ที่ไม่หายตอน redeploy
+   */
+  uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? 'uploads'),
   /** URL ของ frontend — ใช้ตอน redirect กลับจาก OAuth และลิงก์รีเซ็ตรหัสผ่าน */
   frontendUrl: process.env.FRONTEND_URL ?? process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   jwt: {

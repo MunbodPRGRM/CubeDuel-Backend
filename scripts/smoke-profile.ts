@@ -26,7 +26,12 @@ async function patchProfile(
     body: JSON.stringify(body),
   });
   const json = (await res.json()) as { data?: SelfUser; error?: { code: string; message: string } };
-  return { status: res.status, data: json.data, code: json.error?.code, message: json.error?.message };
+  return {
+    status: res.status,
+    data: json.data,
+    code: json.error?.code,
+    message: json.error?.message,
+  };
 }
 
 async function getJson<T>(path: string, token?: string): Promise<T> {
@@ -62,7 +67,11 @@ async function main(): Promise<void> {
 
   console.log('\n4) ค่าที่ไม่ผ่านกติกา');
   const badSkin = await patchProfile(token, { cubeSkin: 'rainbow' });
-  check('สกินที่ไม่รู้จัก → 400', badSkin.status === 400 && badSkin.code === 'E_VALIDATION', badSkin);
+  check(
+    'สกินที่ไม่รู้จัก → 400',
+    badSkin.status === 400 && badSkin.code === 'E_VALIDATION',
+    badSkin,
+  );
   const longName = await patchProfile(token, { nickname: 'ก'.repeat(51) });
   check('ชื่อเล่นเกิน 50 ตัว → 400', longName.status === 400, longName);
   const forbidden = await patchProfile(token, { username: 'hacker' });
@@ -87,7 +96,11 @@ async function main(): Promise<void> {
     nickname: before.nickname,
     cubeSkin: before.cubeSkin,
   });
-  check('คืนค่าเดิมได้ครบ', restored.data?.nickname === before.nickname && restored.data?.cubeSkin === before.cubeSkin, restored.data);
+  check(
+    'คืนค่าเดิมได้ครบ',
+    restored.data?.nickname === before.nickname && restored.data?.cubeSkin === before.cubeSkin,
+    restored.data,
+  );
 
   process.exit(summary('(เฟส 8 ก้อนที่ 1 — โปรไฟล์)'));
 }

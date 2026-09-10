@@ -21,9 +21,7 @@ export const updateProfileSchema = z
       .transform((v) => (v.length === 0 ? null : v))
       .nullable()
       .optional(),
-    cubeSkin: z
-      .enum(CUBE_SKINS, { errorMap: () => ({ message: 'ไม่รู้จักสกินนี้' }) })
-      .optional(),
+    cubeSkin: z.enum(CUBE_SKINS, { errorMap: () => ({ message: 'ไม่รู้จักสกินนี้' }) }).optional(),
   })
   .strict('ส่งฟิลด์ที่แก้ไม่ได้มาด้วย (แก้ได้เฉพาะ nickname กับ cubeSkin)')
   .refine((v) => Object.keys(v).length > 0, 'ไม่มีอะไรให้แก้');

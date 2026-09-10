@@ -18,6 +18,21 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  /**
+   * ไฟล์ที่แอดมินอัปโหลด (รูปข่าว) — อยู่นอก `/api/v1` เพราะเป็นไฟล์ ไม่ใช่ JSON
+   * `index: false` กันไม่ให้เปิดดูรายชื่อไฟล์ในโฟลเดอร์ · `dotfiles: 'deny'` กันไฟล์ซ่อน
+   */
+  app.use(
+    '/uploads',
+    express.static(env.uploadsDir, {
+      index: false,
+      dotfiles: 'deny',
+      maxAge: env.isProduction ? '7d' : 0,
+      // ชื่อไฟล์สุ่มไม่ซ้ำอยู่แล้ว รูปเดิมจึงไม่มีวันเปลี่ยนเนื้อ — cache ยาวได้
+      immutable: env.isProduction,
+    }),
+  );
+
   app.use(API_BASE_PATH, router);
 
   app.use(notFoundHandler);

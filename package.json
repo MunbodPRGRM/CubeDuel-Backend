@@ -18,7 +18,9 @@
     "smoke:match": "tsx scripts/smoke-match.ts",
     "smoke:rated": "tsx scripts/smoke-rated.ts",
     "smoke:queue": "tsx scripts/smoke-queue.ts",
-    "smoke:multi": "tsx scripts/smoke-multi.ts"
+    "smoke:multi": "tsx scripts/smoke-multi.ts",
+    "smoke:stats": "tsx scripts/smoke-stats.ts",
+    "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

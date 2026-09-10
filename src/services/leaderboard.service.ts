@@ -4,12 +4,13 @@ import { errors } from '../lib/errors.js';
 import { ALL_CUBE_TYPES } from '../constants.js';
 import { winRateOf } from '../lib/stats.js';
 import { PRISMA_TO_CUBE_TYPE, type ApiCubeType } from '../types/cube.js';
+import { getWeeklyLeaderboard, type WeeklyLeaderboardRow } from './weekly-leaderboard.service.js';
 
 /**
  * กระดานอันดับ + คะแนนรายบุคคล — ที่มา: docs/api-contract.md ข้อ 3 และ ข้อ 5
  *
- * ⚠️ ทำมาก่อนกำหนด (เป็นงานเฟส 7) เพราะหน้าจอตามดีไซน์ต้องใช้ข้อมูลจริง
- *     `scope=weekly` ยังไม่ทำ — เป็นงานเฟส 7 ก้อนที่ 2
+ * `scope=all` อ่านตัวเลขสรุปจากตาราง `Rating` ตรง ๆ ส่วน `scope=weekly` คำนวณสดจากตารางแมตช์
+ * แล้ว cache ไว้ (อยู่ในไฟล์ `weekly-leaderboard.service.ts` — query หนักคนละชั้นกัน)
  */
 
 /** ตัวเลขสรุปใน Rating เป็นข้อมูลซ้ำซ้อน (ADR-014) — อ่านตรงจากตารางนี้ได้เลย ไม่ต้องนับใหม่ */
@@ -35,13 +36,37 @@ export interface LeaderboardQuery {
 }
 
 export async function getLeaderboard(q: LeaderboardQuery) {
-  if (q.scope === 'weekly') {
-    throw errors.validation(
-      'กระดานอันดับรายสัปดาห์ยังไม่เปิดใช้งาน (ต้องมีข้อมูลการแข่งขันก่อน — เฟส 7)',
-      { scope: 'รองรับเฉพาะ all ในตอนนี้' },
-    );
-  }
+  return q.scope === 'weekly' ? weeklyLeaderboard(q) : allTimeLeaderboard(q);
+}
 
+/**
+ * `scope=weekly` — ดึงกระดานทั้งใบจาก cache (60 วินาที) แล้วตัดหน้าใน memory
+ * ทั้งใบมีไม่เกิน `WEEKLY_MAX_ROWS` แถวอยู่แล้ว การตัดหน้าตรงนี้จึงไม่ใช่ภาระ
+ */
+async function weeklyLeaderboard(q: LeaderboardQuery) {
+  const { rows, week } = await getWeeklyLeaderboard(q.cubeType, q.sortBy);
+
+  const start = (q.page - 1) * q.limit;
+  const data: WeeklyLeaderboardRow[] = rows.slice(start, start + q.limit);
+
+  return {
+    data,
+    meta: {
+      page: q.page,
+      limit: q.limit,
+      total: rows.length,
+      totalPages: Math.max(1, Math.ceil(rows.length / q.limit)),
+      scope: q.scope,
+      cubeType: q.cubeType,
+      // ขอบสัปดาห์ที่ใช้จริง (UTC) — หน้าจอเอาไปแสดงว่ากำลังดูสัปดาห์ไหนอยู่
+      weekStart: week.start.toISOString(),
+      weekEnd: week.end.toISOString(),
+    },
+  };
+}
+
+/** `scope=all` — ตัวเลขทุกตัวมีอยู่ในตาราง `Rating` แล้ว (ADR-014) แบ่งหน้าฝั่ง DB ได้เลย */
+async function allTimeLeaderboard(q: LeaderboardQuery) {
   const cubeType = ALL_CUBE_TYPES.find((c) => PRISMA_TO_CUBE_TYPE[c] === q.cubeType) as CubeType;
 
   // ผู้ใช้ที่ลบบัญชีตัวเองแล้วต้องไม่โผล่บนกระดาน (ADR-008)

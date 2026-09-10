@@ -77,3 +77,14 @@ export const REFRESH_COOKIE_NAME = 'cubeduel_refresh';
 
 /** path ของ cookie — ส่งเฉพาะตอนเรียก endpoint กลุ่ม auth เท่านั้น */
 export const REFRESH_COOKIE_PATH = '/api/v1/auth';
+
+/**
+ * รหัสสกินสีคิวบ์ที่ยอมให้เก็บลง `User.cube_skin` (api-contract.md ข้อ 3)
+ *
+ * **จานสีจริงอยู่ฝั่ง frontend** (`frontend/src/cube/three/colors.ts`) — ที่นี่รู้แค่ว่ารหัสไหนใช้ได้
+ * เพราะสีเป็นเรื่องของการแสดงผลล้วน ๆ server ไม่ได้ใช้ทำอะไรเลย (ADR-048 ข้อ 2)
+ * เพิ่มสกินใหม่ต้องแก้ **สองที่พร้อมกัน** ที่นี่กับไฟล์นั้น ไม่มีอะไรเตือนถ้าลืม (ADR-021)
+ */
+export const CUBE_SKINS = ['classic', 'pastel', 'neon', 'contrast'] as const;
+export type CubeSkinId = (typeof CUBE_SKINS)[number];
+export const DEFAULT_CUBE_SKIN: CubeSkinId = 'classic';

@@ -1,19 +1,25 @@
 import { z } from 'zod';
+import { INT4_MAX, dbIdSchema } from './common.schema.js';
 
 /** กฎ validation ของระบบรายงานผู้เล่น (docs/api-contract.md ข้อ 8) */
 
-const positiveId = z.coerce.number().int().positive();
+/** id ที่มากับ body เป็นตัวเลขของ JSON อยู่แล้ว ไม่ต้อง coerce — แต่ต้องไม่เกิน INT4 เหมือนกัน (ADR-055 ข้อ 2) */
+const bodyId = () => z.number().int().positive().max(INT4_MAX);
 
 export const createReportSchema = z
   .object({
-    reportedUserId: z.number({ required_error: 'ต้องระบุผู้ถูกรายงาน' }).int().positive(),
+    reportedUserId: z
+      .number({ required_error: 'ต้องระบุผู้ถูกรายงาน' })
+      .int()
+      .positive()
+      .max(INT4_MAX),
     reason: z
       .string({ required_error: 'กรุณากรอกเหตุผล' })
       .trim()
       .min(10, 'เหตุผลต้องยาว 10–1000 ตัวอักษร')
       .max(1000, 'เหตุผลต้องยาว 10–1000 ตัวอักษร'),
-    matchId: z.number().int().positive().nullish(),
-    multiplayerMatchId: z.number().int().positive().nullish(),
+    matchId: bodyId().nullish(),
+    multiplayerMatchId: bodyId().nullish(),
   })
   .refine(
     (v) => !(v.matchId && v.multiplayerMatchId),
@@ -46,7 +52,7 @@ export const resolveReportSchema = z
     path: ['suspendedUntil'],
   });
 
-export const reportIdParamSchema = positiveId;
+export const reportIdParamSchema = dbIdSchema('reportId');
 
 export type CreateReportInput = z.infer<typeof createReportSchema>;
 export type AdminReportsQueryInput = z.infer<typeof adminReportsQuerySchema>;

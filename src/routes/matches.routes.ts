@@ -1,15 +1,12 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import { asyncHandler } from '../middleware/async-handler.js';
+import { dbIdSchema } from '../schemas/common.schema.js';
 import { getMatchDetail, getMultiplayerMatchDetail } from '../services/match.service.js';
 
 export const matchesRouter = Router();
 export const multiplayerMatchesRouter = Router();
 
-const matchIdParamSchema = z.coerce
-  .number({ invalid_type_error: 'matchId ต้องเป็นตัวเลข' })
-  .int()
-  .positive();
+const matchIdParamSchema = dbIdSchema('matchId');
 
 /**
  * ผลของแมตช์ 1v1 หนึ่งแมตช์ (api-contract.md ข้อ 3)

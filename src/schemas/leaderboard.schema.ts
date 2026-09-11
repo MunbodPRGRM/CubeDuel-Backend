@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CUBE_TYPES } from '../types/cube.js';
+import { dbIdSchema } from './common.schema.js';
 
 /** กฎมาจาก docs/api-contract.md ข้อ 5 — `limit` สูงสุด 100 ตามข้อตกลง pagination ข้อ 1 */
 export const leaderboardQuerySchema = z.object({
@@ -15,7 +16,4 @@ export const leaderboardQuerySchema = z.object({
 
 export type LeaderboardQueryInput = z.infer<typeof leaderboardQuerySchema>;
 
-export const userIdParamSchema = z.coerce
-  .number({ invalid_type_error: 'userId ต้องเป็นตัวเลข' })
-  .int()
-  .positive();
+export const userIdParamSchema = dbIdSchema('userId');

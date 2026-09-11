@@ -152,6 +152,15 @@ function toAdminUserDto(user: AdminUserRow): AdminUserDto {
   };
 }
 
+/**
+ * `contains` ของ Prisma กลายเป็น `ILIKE '%…%'` โดย **ไม่ escape** `%` กับ `_` ที่ผู้ใช้พิมพ์มา
+ * — ค้นหา "%" แล้วได้ทุกคน ค้นหา "a_b" แล้วเจอ "axb" (`smoke:security` เจอ — ADR-055 ข้อ 5)
+ * ไม่ใช่ SQL injection (ค่ายังเป็นพารามิเตอร์) แต่ผลค้นหาผิด · `\` คือ escape ตั้งต้นของ LIKE ใน Postgres
+ */
+function escapeLike(text: string): string {
+  return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export async function listUsers(q: AdminUsersQueryInput) {
   const where: Prisma.UserWhereInput = {};
 
@@ -161,10 +170,11 @@ export async function listUsers(q: AdminUsersQueryInput) {
     where.AND = [{ status: UserStatus.SUSPENDED }, { deletedAt: null }];
 
   if (q.q) {
+    const term = escapeLike(q.q);
     where.OR = [
-      { username: { contains: q.q, mode: 'insensitive' } },
-      { email: { contains: q.q, mode: 'insensitive' } },
-      { nickname: { contains: q.q, mode: 'insensitive' } },
+      { username: { contains: term, mode: 'insensitive' } },
+      { email: { contains: term, mode: 'insensitive' } },
+      { nickname: { contains: term, mode: 'insensitive' } },
     ];
   }
 

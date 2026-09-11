@@ -17,7 +17,14 @@ import {
 } from '../schemas/socket.schema.js';
 import { on, type TypedServer, type TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
-import { handleMove, handleSolved, handleSurrender, markLoaded, startMatch } from './match.js';
+import {
+  handleDevFinish,
+  handleMove,
+  handleSolved,
+  handleSurrender,
+  markLoaded,
+  startMatch,
+} from './match.js';
 import { joinQueue, leaveQueue } from './queue.js';
 import { createRoom, getRoom, getRoomByCode, membershipOf } from './room-registry.js';
 import type { Room } from './room.js';
@@ -166,4 +173,9 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     handleSurrender(io, requireRoom(socket), socket.data.userId);
     return null;
   });
+
+  // ปุ่มทดสอบ — `handleDevFinish` ปฏิเสธเองเมื่อสวิตช์ปิด · ⚠️ ถอดออกก่อน deploy (ADR-060)
+  on(socket, 'solve:dev_finish', emptyPayloadSchema, (socket) =>
+    handleDevFinish(io, socket, requireRoom(socket)),
+  );
 }

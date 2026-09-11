@@ -308,9 +308,58 @@ export async function handleSolved(
     throw socketErrors.invalidState('แมตช์จบไปแล้ว');
   }
 
+  return settleSolved(io, socket, room, player, room.serverStartTs, receivedTs);
+}
+
+/**
+ * `solve:dev_finish` — ปุ่ม "เสร็จทันที" ของห้องแข่ง **สำหรับทดสอบเท่านั้น** (ADR-060)
+ *
+ * ตัดสินว่าแก้เสร็จ ณ เวลาที่ได้รับ **โดยไม่ replay** แล้วเดินทางเดียวกับ `solve:solved` ทุกอย่าง
+ * move stream ไม่ถูกแตะ — `moveCount` คือท่าที่หมุนจริงถึงตอนกด
+ *
+ * ตรวจสวิตช์ **ก่อน** เงื่อนไขอื่นทุกข้อ ปิดอยู่ = ตอบเหมือนกันหมดไม่ว่าจะส่งมาจากไหน (ADR-060 ข้อ 2)
+ */
+export function handleDevFinish(
+  io: TypedServer,
+  socket: TypedSocket,
+  room: Room,
+): SolveSolvedResult {
+  if (!env.devInstantFinish) {
+    throw socketErrors.invalidState('ปุ่มเสร็จทันทีปิดอยู่บนเซิร์ฟเวอร์นี้');
+  }
+  const player = requirePlayer(room, socket.data.userId);
+  const receivedTs = Date.now();
+
+  if (room.state !== 'SOLVING' && room.state !== 'FINAL_COUNTDOWN') {
+    throw socketErrors.invalidState('ยังไม่ถึงเวลาจับเวลา หรือแมตช์จบไปแล้ว');
+  }
+  if (player.status !== 'solving') throw socketErrors.invalidState('รอบนี้ของคุณจบไปแล้ว');
+  if (room.serverStartTs === null) {
+    throw socketErrors.invalidState('ห้องนี้ยังไม่ได้เริ่มจับเวลา');
+  }
+
+  // ย้อนดูได้ว่าแถวไหนใน DB มาจากปุ่มนี้ — replay move_log ของแถวนั้นแล้วไม่ครบสี (ADR-060 ข้อ 4)
+  console.warn(
+    `[dev] ${player.username} (#${player.userId}) กดเสร็จทันทีในห้อง ${room.roomId} — ตัดสินโดยไม่ replay (DEV_INSTANT_FINISH)`,
+  );
+  return settleSolved(io, socket, room, player, room.serverStartTs, receivedTs);
+}
+
+/**
+ * ตัดสินว่าผู้เล่นคนนี้แก้เสร็จ ณ `receivedTs` — ส่วนท้ายร่วมของ `solve:solved` กับ `solve:dev_finish`
+ * ผู้เรียกต้องตรวจ state ของห้องและของผู้เล่นมาก่อนแล้ว
+ */
+function settleSolved(
+  io: TypedServer,
+  socket: TypedSocket,
+  room: Room,
+  player: RoomPlayer,
+  serverStartTs: number,
+  receivedTs: number,
+): SolveSolvedResult {
   // solveTimeMs = serverReceivedTs - serverStartTs - min(rtt / 2, 150)  (game-rules.md ข้อ 3)
   const compensation = Math.min((socket.data.rttMs ?? 0) / 2, MAX_LATENCY_COMPENSATION_MS);
-  const solveTimeMs = Math.max(0, Math.round(receivedTs - room.serverStartTs - compensation));
+  const solveTimeMs = Math.max(0, Math.round(receivedTs - serverStartTs - compensation));
 
   player.status = 'solved';
   player.solveTimeMs = solveTimeMs;

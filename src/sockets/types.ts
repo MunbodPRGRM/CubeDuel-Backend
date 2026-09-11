@@ -82,6 +82,8 @@ export interface RoomSnapshot {
   matchId: number | null;
   /** `matchId` เป็นเลขของตารางไหน — `null` เมื่อ `matchId` เป็น `null` (ADR-044 ข้อ 1) */
   matchKind: MatchKind | null;
+  /** server นี้รับ `solve:dev_finish` ไหม — ปุ่มทดสอบ (ADR-060) · ⚠️ ถอดออกก่อน deploy */
+  devInstantFinish: boolean;
 }
 
 /**
@@ -252,6 +254,8 @@ export interface ClientToServerEvents {
   'solve:move': (payload: SolveMovePayload) => void;
   'solve:solved': (payload: SolveSolvedPayload, ack?: AckFn<SolveSolvedResult>) => void;
   'solve:surrender': (payload: Record<string, never>, ack?: AckFn<null>) => void;
+  /** ปุ่มทดสอบ — ปฏิเสธเสมอถ้าไม่ได้เปิด `DEV_INSTANT_FINISH` (ADR-060) */
+  'solve:dev_finish': (payload: Record<string, never>, ack?: AckFn<SolveSolvedResult>) => void;
 }
 
 export interface ServerToClientEvents {

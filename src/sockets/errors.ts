@@ -30,8 +30,12 @@ export class SocketError extends Error {
   }
 }
 
+/**
+ * ⚠️ รหัสที่มีทั้งฝั่ง REST และฝั่งนี้ต้องพูดเหมือน `lib/errors.ts` เป๊ะ — ADR-054 ข้อ 2
+ */
 export const socketErrors = {
-  validation: (message = 'ข้อมูลที่ส่งมาไม่ถูกต้อง') => new SocketError('E_VALIDATION', message),
+  validation: (message = 'ข้อมูลที่กรอกไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง') =>
+    new SocketError('E_VALIDATION', message),
   unauthenticated: (message = 'กรุณาเข้าสู่ระบบก่อนใช้งาน') =>
     new SocketError('E_UNAUTHENTICATED', message),
   roomNotFound: (message = 'ไม่พบห้องนี้ อาจถูกยุบไปแล้วหรือรหัสห้องผิด') =>
@@ -43,14 +47,16 @@ export const socketErrors = {
     new SocketError('E_MOVE_DURING_INSPECTION', message),
   invalidMove: (message = 'ท่าหมุนนี้ใช้กับรูบิคประเภทนี้ไม่ได้') =>
     new SocketError('E_INVALID_MOVE', message),
-  seqMismatch: (message = 'ลำดับท่าหมุนไม่ต่อเนื่อง') => new SocketError('E_SEQ_MISMATCH', message),
+  seqMismatch: (message = 'ลำดับท่าหมุนไม่ต่อเนื่อง กรุณาลองใหม่') =>
+    new SocketError('E_SEQ_MISMATCH', message),
   notSolved: (message = 'คิวบ์ยังไม่อยู่ในสถานะแก้เสร็จ') =>
     new SocketError('E_NOT_SOLVED', message),
   alreadyInQueue: (message = 'อยู่ในคิวจับคู่อยู่แล้ว') =>
     new SocketError('E_ALREADY_IN_QUEUE', message),
   accountSuspended: (message = 'บัญชีนี้ถูกระงับการใช้งาน') =>
     new SocketError('E_ACCOUNT_SUSPENDED', message),
-  rateLimited: (message = 'ส่งข้อมูลถี่เกินไป กรุณาช้าลง') =>
+  rateLimited: (message = 'ใช้งานถี่เกินไป กรุณารอสักครู่แล้วลองใหม่') =>
     new SocketError('E_RATE_LIMITED', message),
-  internal: (message = 'เกิดข้อผิดพลาดฝั่งระบบ') => new SocketError('E_INTERNAL', message),
+  internal: (message = 'เกิดข้อผิดพลาดฝั่งระบบ กรุณาลองใหม่อีกครั้ง') =>
+    new SocketError('E_INTERNAL', message),
 };

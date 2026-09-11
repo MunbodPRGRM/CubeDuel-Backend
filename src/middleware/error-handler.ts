@@ -16,7 +16,8 @@ function fromZod(err: ZodError): AppError {
     // เก็บข้อความแรกของแต่ละฟิลด์ไว้พอ ผู้ใช้อ่านทีละข้อ
     if (!(key in fields)) fields[key] = issue.message;
   }
-  return errors.validation('ข้อมูลที่ส่งมาไม่ผ่านการตรวจสอบ', fields);
+  // ข้อความรวมใช้ของตั้งต้น — รายละเอียดที่ผู้ใช้ต้องแก้จริงอยู่ใน `fields` รายช่องอยู่แล้ว
+  return errors.validation(undefined, fields);
 }
 
 /**

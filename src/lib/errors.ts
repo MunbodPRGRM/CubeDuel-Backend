@@ -40,8 +40,14 @@ export class AppError extends Error {
   }
 }
 
+/**
+ * ⚠️ ข้อความตั้งต้นของรหัสที่ **มีทั้งฝั่ง REST และฝั่ง socket** (`E_VALIDATION`,
+ * `E_UNAUTHENTICATED`, `E_ACCOUNT_SUSPENDED`, `E_RATE_LIMITED`, `E_INTERNAL`)
+ * ต้องตรงกับ `sockets/errors.ts` และกับคลังของ frontend เป๊ะ — ADR-054 ข้อ 2
+ * · แก้ที่ไหนต้องไล่แก้ให้ครบทั้งสามที่ แล้วรัน `npm run verify:errors` ที่ฝั่ง frontend
+ */
 export const errors = {
-  validation: (message = 'ข้อมูลที่ส่งมาไม่ถูกต้อง', fields?: ErrorFields) =>
+  validation: (message = 'ข้อมูลที่กรอกไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง', fields?: ErrorFields) =>
     new AppError('E_VALIDATION', message, fields),
   unauthenticated: (message = 'กรุณาเข้าสู่ระบบก่อนใช้งาน') =>
     new AppError('E_UNAUTHENTICATED', message),
@@ -51,7 +57,8 @@ export const errors = {
   notFound: (message = 'ไม่พบข้อมูลที่ต้องการ') => new AppError('E_NOT_FOUND', message),
   conflict: (message = 'ข้อมูลนี้ถูกใช้ไปแล้ว', fields?: ErrorFields) =>
     new AppError('E_CONFLICT', message, fields),
-  rateLimited: (message = 'เรียกใช้งานถี่เกินไป กรุณารอสักครู่') =>
+  rateLimited: (message = 'ใช้งานถี่เกินไป กรุณารอสักครู่แล้วลองใหม่') =>
     new AppError('E_RATE_LIMITED', message),
-  internal: (message = 'เกิดข้อผิดพลาดฝั่งระบบ') => new AppError('E_INTERNAL', message),
+  internal: (message = 'เกิดข้อผิดพลาดฝั่งระบบ กรุณาลองใหม่อีกครั้ง') =>
+    new AppError('E_INTERNAL', message),
 };

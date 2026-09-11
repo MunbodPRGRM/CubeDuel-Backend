@@ -48,9 +48,7 @@ function limiterOf(socket: TypedSocket): SocketRateLimiter {
 function fromZod(error: ZodError): SocketError {
   const issue = error.issues[0];
   const path = issue?.path.join('.');
-  return socketErrors.validation(
-    issue ? `${path ? `${path}: ` : ''}${issue.message}` : 'ข้อมูลที่ส่งมาไม่ถูกต้อง',
-  );
+  return socketErrors.validation(issue ? `${path ? `${path}: ` : ''}${issue.message}` : undefined);
 }
 
 function toAckError(error: unknown, event: string): AckError {

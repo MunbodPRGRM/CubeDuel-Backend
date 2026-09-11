@@ -77,7 +77,8 @@ async function call(
     body = JSON.stringify(opts.body);
     headers['content-type'] = 'application/json';
   }
-  const res = await fetch(`${API}${url}`, { method, headers, body });
+  // ห้ามตาม redirect — endpoint เข้าสู่ระบบด้วย Google ตอบ 302 ไปหา Google / หน้าเว็บ (ADR-058)
+  const res = await fetch(`${API}${url}`, { method, headers, body, redirect: 'manual' });
   const text = await res.text();
   let json: unknown = null;
   try {
@@ -281,6 +282,14 @@ function access(f: Fixture): Record<string, Access> {
       path: '/auth/reset-password',
       body: {},
       passStatus: 400,
+    },
+    // เปิดหน้าเว็บ ไม่ใช่ JSON — ตอบ 302 เสมอ: ไปหา Google หรือกลับหน้าเข้าสู่ระบบถ้าไม่ได้ตั้งค่า (ADR-058)
+    'GET /auth/oauth/google': { level: 'public', path: '/auth/oauth/google', passStatus: 302 },
+    // ไม่มี cookie state → 302 กลับหน้าเข้าสู่ระบบพร้อม oauth_error
+    'GET /auth/oauth/google/callback': {
+      level: 'public',
+      path: '/auth/oauth/google/callback',
+      passStatus: 302,
     },
 
     'GET /users/me': { level: 'member', path: '/users/me', passStatus: 200 },

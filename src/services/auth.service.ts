@@ -19,7 +19,7 @@ import type { LoginInput, RegisterInput } from '../schemas/auth.schema.js';
  *
  * กฎที่ห้ามพลาด:
  *   - สมัครสมาชิก 1 คน = สร้างแถว Rating ครบ 4 cube_type ในทรานแซกชันเดียวกัน
- *   - password_hash เป็น NULL ได้ (ผู้ใช้ OAuth) → ตอน login ต้องบอกว่าใช้ Google/Facebook
+ *   - password_hash เป็น NULL ได้ (ผู้ใช้ Google) → ตอน login ต้องบอกว่าใช้ Google
  *   - ลบบัญชีใช้ soft delete (ADR-008) ห้ามลบแถวจริง
  *   - เปลี่ยน/รีเซ็ตรหัสผ่าน ระงับบัญชี ลบบัญชี → เพิกถอน refresh token ทั้งหมด (ADR-013)
  */
@@ -29,7 +29,8 @@ const INVALID_CREDENTIALS = 'ชื่อผู้ใช้หรือรหั
 
 // ---------------------------------------------------------------- session
 
-async function issueSession(user: User, deviceLabel?: string): Promise<AuthSessionDto> {
+/** ออก access + refresh token ให้ผู้ใช้ที่ผ่านการยืนยันตัวตนแล้ว (รหัสผ่าน หรือ Google — `oauth.service.ts`) */
+export async function issueSession(user: User, deviceLabel?: string): Promise<AuthSessionDto> {
   const accessToken = signAccessToken({
     sub: user.userId,
     username: user.username,
@@ -90,6 +91,19 @@ export async function assertUsable(user: User): Promise<User> {
 
 // ---------------------------------------------------------------- สมัคร / เข้าสู่ระบบ
 
+/**
+ * ผู้ใช้ 1 คน = Rating ครบ 4 cube_type (database-schema.md ตารางที่ 6)
+ * ต้องเรียกใน **ทรานแซกชันเดียวกับที่สร้าง User เสมอ** — ทั้งสมัครด้วยรหัสผ่านและสมัครด้วย Google
+ */
+export async function createInitialRatings(
+  tx: Prisma.TransactionClient,
+  userId: number,
+): Promise<void> {
+  await tx.rating.createMany({
+    data: ALL_CUBE_TYPES.map((cubeType) => ({ userId, cubeType, eloRating: ELO_INITIAL_RATING })),
+  });
+}
+
 export async function register(
   input: RegisterInput,
   deviceLabel?: string,
@@ -117,15 +131,7 @@ export async function register(
       },
     });
 
-    // ต้องอยู่ในทรานแซกชันเดียวกับการสร้าง User เสมอ
-    await tx.rating.createMany({
-      data: ALL_CUBE_TYPES.map((cubeType) => ({
-        userId: created.userId,
-        cubeType,
-        eloRating: ELO_INITIAL_RATING,
-      })),
-    });
-
+    await createInitialRatings(tx, created.userId);
     return created;
   });
 
@@ -143,9 +149,12 @@ export async function login(input: LoginInput, deviceLabel?: string): Promise<Au
 
   if (!user) throw errors.unauthenticated(INVALID_CREDENTIALS);
 
-  // ผู้ใช้ OAuth ไม่มีรหัสผ่าน — ต้องบอกให้ตรง ไม่ใช่ "รหัสผ่านผิด" (ADR-012)
+  // ผู้ใช้ Google ไม่มีรหัสผ่าน — ต้องบอกให้ตรง ไม่ใช่ "รหัสผ่านผิด" (ADR-012)
+  // รวมบัญชีที่เพิ่งผูก Google แล้วรหัสผ่านเดิมถูกล้าง (ADR-058 ข้อ 4) → บอกทางตั้งรหัสใหม่ด้วย
   if (!user.passwordHash) {
-    throw errors.unauthenticated('บัญชีนี้เข้าสู่ระบบด้วย Google หรือ Facebook');
+    throw errors.unauthenticated(
+      'บัญชีนี้ยังไม่มีรหัสผ่าน กรุณาเข้าสู่ระบบด้วย Google หรือตั้งรหัสผ่านผ่าน "ลืมรหัสผ่าน?"',
+    );
   }
 
   const ok = await verifyPassword(input.password, user.passwordHash);

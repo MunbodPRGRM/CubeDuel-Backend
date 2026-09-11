@@ -85,6 +85,14 @@ export const REFRESH_COOKIE_NAME = 'cubeduel_refresh';
 export const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
 /**
+ * cookie ที่พก `state` + PKCE verifier + `returnTo` ระหว่างไปหน้า Google แล้วกลับมา (ADR-058 ข้อ 2)
+ * อายุสั้น — ผู้ใช้เลือกบัญชีไม่นานขนาดนั้น เปิดค้างเกินนี้ต้องกดใหม่
+ */
+export const OAUTH_COOKIE_NAME = 'cubeduel_oauth';
+export const OAUTH_COOKIE_PATH = '/api/v1/auth/oauth';
+export const OAUTH_STATE_TTL_MS = 10 * 60_000;
+
+/**
  * รหัสสกินสีคิวบ์ที่ยอมให้เก็บลง `User.cube_skin` (api-contract.md ข้อ 3)
  *
  * **จานสีจริงอยู่ฝั่ง frontend** (`frontend/src/cube/three/colors.ts`) — ที่นี่รู้แค่ว่ารหัสไหนใช้ได้

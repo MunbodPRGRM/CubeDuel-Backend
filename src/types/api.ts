@@ -31,6 +31,11 @@ export interface SelfUserDto extends PublicUserDto {
   email: string;
   cubeSkin: string;
   status: ApiUserStatus;
+  /**
+   * `false` = บัญชี Google ที่ยังไม่เคยตั้งรหัสผ่าน (ADR-058 ข้อ 6)
+   * หน้าตั้งค่าใช้ตัดสินว่าต้องถามรหัสผ่านเดิม/รหัสผ่านยืนยันไหม — เป็น boolean ไม่มีอะไรของ hash หลุด
+   */
+  hasPassword: boolean;
 }
 
 export function toPublicUser(user: User): PublicUserDto {
@@ -49,6 +54,7 @@ export function toSelfUser(user: User): SelfUserDto {
     email: user.email,
     cubeSkin: user.cubeSkin,
     status: USER_STATUS_TO_API[user.status],
+    hasPassword: user.passwordHash !== null,
   };
 }
 

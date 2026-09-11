@@ -56,8 +56,28 @@ function smtpConfig() {
 
 const smtp = mailTransport === 'smtp' ? smtpConfig() : null;
 
+const port = Number(process.env.PORT ?? 4000);
+
+/**
+ * เข้าสู่ระบบด้วย Google (ADR-058) — ไม่ตั้ง client id/secret = ปิดฟีเจอร์นี้ ไม่ใช่สตาร์ตไม่ขึ้น
+ * (ปุ่มบนหน้าเว็บยังอยู่ กดแล้วกลับมาพร้อม `oauth_error=unavailable`) เพราะเป็นทางเสริมของการเข้าสู่ระบบ
+ * `callbackUrl` ต้องตรงกับ Authorized redirect URI ใน Google Cloud Console ทุกตัวอักษร
+ */
+function googleConfig() {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  return {
+    clientId,
+    clientSecret,
+    callbackUrl:
+      process.env.GOOGLE_CALLBACK_URL?.trim() ||
+      `http://localhost:${port}/api/v1/auth/oauth/google/callback`,
+  };
+}
+
 export const env = {
-  port: Number(process.env.PORT ?? 4000),
+  port,
   /**
    * เปิดให้สร้างห้อง `competitive` ด้วยรหัสห้องเพื่อทดสอบการปรับ Elo ก่อนคิวจับคู่จะเสร็จ
    * (เฟส 5 ก้อนที่ 1 — ADR-038) บน production ปิดตายเสมอไม่ว่าจะตั้งค่าไว้ยังไง
@@ -88,6 +108,8 @@ export const env = {
       process.env.MAIL_FROM ||
       (smtp ? `CubeDuel <${smtp.user}>` : 'CubeDuel <noreply@cubeduel.local>'),
   },
+  /** `null` = ไม่ได้ตั้งค่า → ปิดการเข้าสู่ระบบด้วย Google */
+  google: googleConfig(),
   jwt: {
     accessSecret,
     refreshSecret,

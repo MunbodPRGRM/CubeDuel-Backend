@@ -26,6 +26,7 @@
     "smoke:jobs": "tsx scripts/smoke-jobs.ts",
     "smoke:security": "tsx scripts/smoke-security.ts",
     "smoke:reset": "tsx scripts/smoke-reset.ts",
+    "smoke:oauth": "tsx scripts/smoke-oauth.ts",
     "load:rooms": "tsx scripts/load-rooms.ts",
     "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },

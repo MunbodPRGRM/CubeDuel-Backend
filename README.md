@@ -74,6 +74,7 @@ curl http://localhost:4000/api/v1/health
 | `npm run smoke:socket` | ทดสอบวงจรชีวิตห้องผ่าน Socket.IO จริง (ต้องมี `npm run dev` รันอยู่ + seed แล้ว) |
 | `npm run smoke:match` | เล่นแมตช์จนจบจริงแล้วตรวจแถวใน DB (~2 นาที เพราะรอ inspection/grace ของจริง) |
 | `npm run smoke:rated` | เล่นในห้องแข่งขันแล้วตรวจว่า Elo ขยับถูกทั้งสองฝั่ง (~1 นาที · ต้องตั้ง `ALLOW_TEST_COMPETITIVE_ROOM=1`) |
+| `npm run smoke:camera` | มุมกล้องของคู่แข่ง `solve:camera` → `opponent:camera` — ส่งต่อเฉพาะช่วงที่กำหนด · ผู้ชมได้ด้วย · ผิด/ถี่เกินทิ้งเงียบ (~25 วินาที · ADR-062) |
 | `npm run smoke:dev-finish` | ปุ่ม "เสร็จทันที" ของห้องแข่ง — สวิตช์ปิดตรวจว่าถูกปฏิเสธ · เปิด (`DEV_INSTANT_FINISH=true`) เล่นจนจบด้วยปุ่มนี้ (~25 วินาที · ADR-060) |
 
 ## ตัวแปรสภาพแวดล้อม

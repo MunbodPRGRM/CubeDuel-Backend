@@ -84,6 +84,20 @@ export const solveMoveSchema = z.object({
   clientTs: z.number().int().nonnegative(),
 });
 
+/** หนึ่งช่องของ quaternion หนึ่งหน่วย — อยู่ใน [-1, 1] เสมอ */
+const quaternionPart = z.number().finite().min(-1).max(1);
+
+/**
+ * `solve:camera` (ADR-062) — server แค่ส่งต่อ แต่ต้องกันค่าที่ทำให้ฝั่งรับพัง (ระยะล้าน · เวกเตอร์ศูนย์)
+ * client ปัดทศนิยม 4 ตำแหน่ง ความยาวจึงคลาดจาก 1 ได้นิดหน่อย
+ */
+export const solveCameraSchema = z.object({
+  q: z
+    .tuple([quaternionPart, quaternionPart, quaternionPart, quaternionPart])
+    .refine((q) => Math.abs(Math.hypot(...q) - 1) < 0.01, 'quaternion ต้องยาว 1 หน่วย'),
+  d: z.number().finite().min(1).max(50),
+});
+
 export const solveSolvedSchema = z.object({
   seq: z.number().int().nonnegative(),
   moveCount: z.number().int().nonnegative(),

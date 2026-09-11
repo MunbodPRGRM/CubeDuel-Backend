@@ -12,6 +12,7 @@ import {
   roomJoinSchema,
   roomReadySchema,
   roomRejoinSchema,
+  solveCameraSchema,
   solveMoveSchema,
   solveSolvedSchema,
 } from '../schemas/socket.schema.js';
@@ -23,6 +24,7 @@ import {
   handleSolved,
   handleSurrender,
   markLoaded,
+  relayCamera,
   startMatch,
 } from './match.js';
 import { joinQueue, leaveQueue } from './queue.js';
@@ -164,6 +166,18 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     handleMove(io, socket, requireRoom(socket), payload);
     return null;
   });
+
+  // ส่งถี่ (~12/วิ) และหายไปหนึ่งครั้งไม่มีผล — ผิดทุกแบบทิ้งเงียบ ไม่ emit `error` (ADR-062 ข้อ 2)
+  on(
+    socket,
+    'solve:camera',
+    solveCameraSchema,
+    (socket, payload) => {
+      relayCamera(io, socket, requireRoom(socket), payload);
+      return null;
+    },
+    { quiet: true },
+  );
 
   on(socket, 'solve:solved', solveSolvedSchema, (socket, payload) =>
     handleSolved(io, socket, requireRoom(socket), payload),

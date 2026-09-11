@@ -83,6 +83,11 @@ export const env = {
    * (เฟส 5 ก้อนที่ 1 — ADR-038) บน production ปิดตายเสมอไม่ว่าจะตั้งค่าไว้ยังไง
    */
   allowTestCompetitiveRoom: !isProduction && process.env.ALLOW_TEST_COMPETITIVE_ROOM === '1',
+  /**
+   * ปุ่ม "เสร็จทันที" ในห้องแข่ง (`solve:dev_finish`) — **สำหรับทดสอบเท่านั้น** (เฟส 12 ก้อนที่ 3 · ADR-060)
+   * production ปิดตายเสมอไม่ว่าจะตั้งค่าไว้ยังไง · ⚠️ ถอดออกก่อน deploy
+   */
+  devInstantFinish: !isProduction && process.env.DEV_INSTANT_FINISH === 'true',
   nodeEnv,
   isProduction,
   /**

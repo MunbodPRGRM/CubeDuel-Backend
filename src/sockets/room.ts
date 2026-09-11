@@ -5,6 +5,7 @@
  * กติกาที่ยึด: `docs/game-rules.md` ข้อ 9 (ห้องสร้างเอง/ผู้ชม/การโอน host)
  * ตัวตนของผู้เล่นคือ `userId` **ไม่ใช่ socket id** — คนหนึ่งเปิดได้หลายแท็บ (ADR-034 ข้อ 3)
  */
+import { env } from '../config/env.js';
 import { MULTIPLAYER_ROOM_MIN } from '../constants.js';
 import type {
   CubeType,
@@ -320,6 +321,8 @@ export class Room {
           : this.lastMatchId !== null
             ? '1v1'
             : null,
+      // ค่าของทั้ง server ไม่ใช่ของห้อง — client ใช้ตัดสินว่าจะแสดงปุ่มทดสอบไหม (ADR-060 ข้อ 3)
+      devInstantFinish: env.devInstantFinish,
     };
   }
 }

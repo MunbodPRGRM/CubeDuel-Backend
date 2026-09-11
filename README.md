@@ -74,6 +74,7 @@ curl http://localhost:4000/api/v1/health
 | `npm run smoke:socket` | ทดสอบวงจรชีวิตห้องผ่าน Socket.IO จริง (ต้องมี `npm run dev` รันอยู่ + seed แล้ว) |
 | `npm run smoke:match` | เล่นแมตช์จนจบจริงแล้วตรวจแถวใน DB (~2 นาที เพราะรอ inspection/grace ของจริง) |
 | `npm run smoke:rated` | เล่นในห้องแข่งขันแล้วตรวจว่า Elo ขยับถูกทั้งสองฝั่ง (~1 นาที · ต้องตั้ง `ALLOW_TEST_COMPETITIVE_ROOM=1`) |
+| `npm run smoke:dev-finish` | ปุ่ม "เสร็จทันที" ของห้องแข่ง — สวิตช์ปิดตรวจว่าถูกปฏิเสธ · เปิด (`DEV_INSTANT_FINISH=true`) เล่นจนจบด้วยปุ่มนี้ (~25 วินาที · ADR-060) |
 
 ## ตัวแปรสภาพแวดล้อม
 
@@ -89,6 +90,7 @@ curl http://localhost:4000/api/v1/health
 | `FRONTEND_URL` | ตามค่า `CORS_ORIGIN` | OAuth redirect + ลิงก์รีเซ็ตรหัสผ่าน |
 | `DISABLE_RATE_LIMIT` | `false` | ตั้ง `true` เฉพาะตอน dev เวลายิงทดสอบรัว ๆ |
 | `ALLOW_TEST_COMPETITIVE_ROOM` | `0` | ตั้ง `1` ให้ `room:create` สร้างห้อง `competitive` ได้ ใช้กับ `npm run smoke:rated` ก่อนคิวจับคู่จะเสร็จ (ADR-038) — production ปิดตายเสมอ |
+| `DEV_INSTANT_FINISH` | `false` | ตั้ง `true` ให้ห้องแข่งมีปุ่ม "เสร็จทันที" (`solve:dev_finish`) ไว้ทดสอบ — ห้องที่ปรับคะแนนปรับ Elo ใน DB จริง (ADR-060) · production ปิดตายเสมอ · ⚠️ ถอดออกก่อน deploy |
 | `GOOGLE_*` / `FACEBOOK_*` | — | เฟส 2 (OAuth) |
 
 ## โครงสร้างโค้ด

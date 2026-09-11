@@ -28,6 +28,7 @@
     "smoke:reset": "tsx scripts/smoke-reset.ts",
     "smoke:oauth": "tsx scripts/smoke-oauth.ts",
     "smoke:dev-finish": "tsx scripts/smoke-dev-finish.ts",
+    "smoke:camera": "tsx scripts/smoke-camera.ts",
     "load:rooms": "tsx scripts/load-rooms.ts",
     "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },

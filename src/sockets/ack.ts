@@ -68,6 +68,15 @@ function toAckError(error: unknown, event: string): AckError {
 
 export type SocketHandler<P, R> = (socket: TypedSocket, payload: P) => Promise<R> | R;
 
+export interface OnOptions {
+  /**
+   * ล้มแล้ว **ทิ้งเงียบ** ไม่ emit event `error` (ถ้า client แนบ ack มาก็ยังตอบตามปกติ)
+   * ใช้กับ event ที่ส่งถี่และหายไปหนึ่งครั้งไม่มีผล — `solve:camera` (ADR-062 ข้อ 2)
+   * ข้อผิดพลาดที่ไม่รู้จักยัง log ฝั่ง server เหมือนเดิม
+   */
+  quiet?: boolean;
+}
+
 /**
  * ผูก handler เข้ากับ event หนึ่งตัว
  * (ต้อง cast ตอน `socket.on` เพราะ type ของ Socket.IO บังคับ signature ของแต่ละ event ตายตัว)
@@ -77,12 +86,14 @@ export function on<S extends ZodTypeAny, R>(
   event: keyof ClientToServerEvents & string,
   schema: S,
   handler: SocketHandler<z.infer<S>, R>,
+  options: OnOptions = {},
 ): void {
   const listener = (rawPayload: unknown, rawAck?: unknown) => {
     const respond = typeof rawAck === 'function' ? (rawAck as AckFn<R>) : undefined;
 
     const fail = (error: unknown) => {
       const ackError = toAckError(error, event);
+      if (!respond && options.quiet) return;
       if (respond) respond({ ok: false, error: ackError });
       else socket.emit('error', ackError);
     };

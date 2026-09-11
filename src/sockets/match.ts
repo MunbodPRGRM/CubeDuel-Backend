@@ -42,6 +42,7 @@ import {
   type MatchKind,
   type MatchResult,
   type MatchResultEntry,
+  type SolveCameraPayload,
   type SolveMovePayload,
   type SolveSolvedPayload,
   type SolveSolvedResult,
@@ -265,6 +266,31 @@ export function handleMove(
       move: payload.move,
       serverTs,
     });
+}
+
+/**
+ * `solve:camera` — ส่งต่อมุมกล้องให้คนอื่นในห้อง + ผู้ชม (ADR-062)
+ *
+ * server **แค่ส่งต่อ** ไม่เก็บ ไม่ตัดสินอะไรจากค่านี้ · ผิดเงื่อนไขก็แค่ไม่ส่ง — ตัวผูก handler
+ * ตั้ง `quiet` ไว้ ต่อให้โยน error ออกไปก็ไม่ถึง client อยู่ดี (ADR-062 ข้อ 2)
+ */
+export function relayCamera(
+  io: TypedServer,
+  socket: TypedSocket,
+  room: Room,
+  payload: SolveCameraPayload,
+): void {
+  const userId = socket.data.userId;
+  if (!room.players.has(userId)) return; // ผู้ชมไม่มีกล้องให้คนอื่นตาม
+  // INSPECTION + ช่วงจับเวลาเท่านั้น ตามขอบเขตที่ตกลงไว้ (roadmap เฟส 12 ก้อนที่ 5)
+  if (room.state !== 'INSPECTION' && room.state !== 'SOLVING' && room.state !== 'FINAL_COUNTDOWN') {
+    return;
+  }
+
+  io.to(playerRoomName(room.roomId))
+    .to(spectatorRoomName(room.roomId))
+    .except(socket.id)
+    .emit('opponent:camera', { userId, q: payload.q, d: payload.d });
 }
 
 /**

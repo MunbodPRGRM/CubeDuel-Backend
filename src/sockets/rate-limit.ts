@@ -10,6 +10,8 @@ import { env } from '../config/env.js';
 /** จำนวนครั้งต่อวินาทีของแต่ละ event — ไม่ระบุ = ใช้ค่าเริ่มต้น */
 const LIMIT_PER_SECOND: Record<string, number> = {
   'solve:move': 30,
+  // client ส่ง ~12 ครั้ง/วินาที · เกินแล้วทิ้งเงียบ ไม่ส่ง `error` กลับ (ADR-062 ข้อ 2)
+  'solve:camera': 30,
   // เข้า/ออกคิวรัว ๆ ทำให้ต้องอ่าน Rating จาก DB ทุกครั้ง — ปุ่มจริงกดได้ไม่เกินนี้อยู่แล้ว
   'queue:join': 3,
 };

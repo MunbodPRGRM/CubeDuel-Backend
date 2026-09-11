@@ -5,16 +5,26 @@ import { errors } from '../lib/errors.js';
 import { parseDurationMs } from '../lib/jwt.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAuth, currentUser } from '../middleware/auth.js';
-import { authLimiter, loginLimiter, registerLimiter } from '../middleware/rate-limit.js';
+import {
+  authLimiter,
+  forgotPasswordLimiter,
+  loginLimiter,
+  registerLimiter,
+} from '../middleware/rate-limit.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   changePasswordSchema,
   deleteAccountSchema,
+  forgotPasswordSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
+  resetPasswordSchema,
+  type ForgotPasswordInput,
+  type ResetPasswordInput,
 } from '../schemas/auth.schema.js';
 import * as authService from '../services/auth.service.js';
+import * as passwordReset from '../services/password-reset.service.js';
 import type { AuthSessionDto } from '../types/api.js';
 
 export const authRouter = Router();
@@ -134,4 +144,34 @@ authRouter.delete(
   }),
 );
 
-// TODO(เฟส 2): GET /oauth/:provider + callback, POST /forgot-password, POST /reset-password
+/**
+ * ขอลิงก์รีเซ็ตรหัสผ่าน — **ตอบก่อน แล้วค่อยหาบัญชีกับส่งอีเมล** (ADR-057 ข้อ 1)
+ * ถ้ารอส่งเสร็จ อีเมลที่มีบัญชีจะตอบช้ากว่าเห็น ๆ = บอกคนนอกว่าอีเมลไหนสมัครไว้
+ */
+authRouter.post(
+  '/forgot-password',
+  forgotPasswordLimiter,
+  validateBody(forgotPasswordSchema),
+  (req, res) => {
+    const { email } = req.body as ForgotPasswordInput;
+    res.json({ data: { sent: true } });
+    void passwordReset
+      .requestPasswordReset(email)
+      .catch((err: unknown) => console.error('[forgot-password]', err));
+  },
+);
+
+authRouter.post(
+  '/reset-password',
+  authLimiter,
+  validateBody(resetPasswordSchema),
+  asyncHandler(async (req, res) => {
+    const { token, newPassword } = req.body as ResetPasswordInput;
+    await passwordReset.resetPassword(token, newPassword);
+    // ทุกเซสชันถูกเพิกถอนแล้ว — ล้าง cookie ของเบราว์เซอร์นี้ด้วย ผู้ใช้ต้องเข้าสู่ระบบใหม่ (ADR-057 ข้อ 6)
+    res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
+    res.json({ data: { passwordReset: true } });
+  }),
+);
+
+// TODO(เฟส 2): GET /oauth/:provider + callback

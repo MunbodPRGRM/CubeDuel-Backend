@@ -269,6 +269,19 @@ function access(f: Fixture): Record<string, Access> {
       limitedBeforeGate: true,
       skipPass: 'ลบบัญชีจริง',
     },
+    // body ว่าง → ตกที่ validation ไม่ส่งอีเมลจริง · limiter 10/ชั่วโมง ยิงรอบละครั้งไม่ชนเพดาน (ADR-057)
+    'POST /auth/forgot-password': {
+      level: 'public',
+      path: '/auth/forgot-password',
+      body: {},
+      passStatus: 400,
+    },
+    'POST /auth/reset-password': {
+      level: 'public',
+      path: '/auth/reset-password',
+      body: {},
+      passStatus: 400,
+    },
 
     'GET /users/me': { level: 'member', path: '/users/me', passStatus: 200 },
     'PATCH /users/me': { level: 'member', path: '/users/me', body: {}, passStatus: 400 },

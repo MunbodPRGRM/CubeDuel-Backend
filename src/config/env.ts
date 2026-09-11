@@ -24,6 +24,38 @@ if (accessSecret === refreshSecret) {
   throw new Error('JWT_ACCESS_SECRET กับ JWT_REFRESH_SECRET ต้องไม่เหมือนกัน');
 }
 
+/**
+ * ส่งอีเมล (ADR-056) — `console` = พิมพ์ลง log แทนการส่งจริง ใช้ตอน dev ได้โดยไม่ต้องมีบัญชีอะไร
+ * production ต้องเป็น `smtp` และตั้ง SMTP ครบ ไม่งั้นสตาร์ตไม่ขึ้น
+ * (เงียบ ๆ ไม่ส่งอีเมลรีเซ็ตรหัสผ่านบน production แย่กว่าล้มตั้งแต่สตาร์ต)
+ */
+function emailTransport(): 'smtp' | 'console' {
+  const value = process.env.EMAIL_TRANSPORT || (isProduction ? 'smtp' : 'console');
+  if (value !== 'smtp' && value !== 'console') {
+    throw new Error(`EMAIL_TRANSPORT ต้องเป็น smtp หรือ console (ได้ "${value}")`);
+  }
+  if (isProduction && value !== 'smtp') {
+    throw new Error('production ต้องตั้ง EMAIL_TRANSPORT=smtp — โหมด console ไม่ได้ส่งอีเมลจริง');
+  }
+  return value;
+}
+
+const mailTransport = emailTransport();
+
+function smtpConfig() {
+  const port = Number(process.env.SMTP_PORT || 465);
+  if (!Number.isInteger(port)) throw new Error('SMTP_PORT ต้องเป็นตัวเลข');
+  return {
+    host: required('SMTP_HOST'),
+    port,
+    user: required('SMTP_USER'),
+    /** Gmail = App Password 16 ตัว ไม่ใช่รหัสผ่านจริงของบัญชี (ADR-056 ข้อ 2) */
+    pass: required('SMTP_PASS'),
+  };
+}
+
+const smtp = mailTransport === 'smtp' ? smtpConfig() : null;
+
 export const env = {
   port: Number(process.env.PORT ?? 4000),
   /**
@@ -47,6 +79,15 @@ export const env = {
   uploadsDir: path.resolve(process.env.UPLOADS_DIR ?? 'uploads'),
   /** URL ของ frontend — ใช้ตอน redirect กลับจาก OAuth และลิงก์รีเซ็ตรหัสผ่าน */
   frontendUrl: process.env.FRONTEND_URL ?? process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+  /** ส่งอีเมล (ADR-056) — ใช้ผ่าน `lib/mailer.ts` เท่านั้น */
+  mail: {
+    transport: mailTransport,
+    /** `null` เมื่อ `transport = 'console'` */
+    smtp,
+    from:
+      process.env.MAIL_FROM ||
+      (smtp ? `CubeDuel <${smtp.user}>` : 'CubeDuel <noreply@cubeduel.local>'),
+  },
   jwt: {
     accessSecret,
     refreshSecret,

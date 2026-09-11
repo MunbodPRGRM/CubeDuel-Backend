@@ -78,6 +78,20 @@ export const deleteAccountSchema = z.object({
   password: z.string().min(1, 'กรุณากรอกรหัสผ่านเพื่อยืนยัน').optional(),
 });
 
+export const forgotPasswordSchema = z.object({ email });
+
+export const resetPasswordSchema = z.object({
+  /** token ดิบจากลิงก์ในอีเมล — ของจริงยาว 64 ตัว (48 ไบต์ base64url) เพดาน 200 กันยัดของยาว ๆ มาให้ hash */
+  token: z
+    .string({ required_error: 'ไม่พบรหัสในลิงก์รีเซ็ตรหัสผ่าน' })
+    .trim()
+    .min(1, 'ไม่พบรหัสในลิงก์รีเซ็ตรหัสผ่าน')
+    .max(200, 'ลิงก์รีเซ็ตรหัสผ่านไม่ถูกต้อง'),
+  newPassword: password,
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

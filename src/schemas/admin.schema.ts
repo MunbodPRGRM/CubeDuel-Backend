@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CUBE_TYPES } from '../types/cube.js';
+import { dbIdSchema } from './common.schema.js';
 
 /** กฎ validation ของ endpoint กลุ่มแอดมิน (docs/api-contract.md ข้อ 9) */
 
@@ -50,7 +51,7 @@ export const reviewFlagSchema = z.object({
   note: z.string().trim().max(500).nullish(),
 });
 
-export const flagIdParamSchema = z.coerce.number().int().positive();
+export const flagIdParamSchema = dbIdSchema('flagId');
 
 export type AdminUsersQueryInput = z.infer<typeof adminUsersQuerySchema>;
 export type UpdateUserStatusInput = z.infer<typeof updateUserStatusSchema>;

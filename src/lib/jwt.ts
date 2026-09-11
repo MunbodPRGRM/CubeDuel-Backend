@@ -26,21 +26,32 @@ export function parseDurationMs(value: string): number {
   return n * factor;
 }
 
+/**
+ * อัลกอริทึมเดียวที่ระบบนี้ออกและยอมรับ — ตรึงไว้ทั้งตอนเซ็นและตอนตรวจ (ADR-055 ข้อ 3)
+ * ไม่ตรึง = jsonwebtoken รับ HS384/HS512 ที่เซ็นด้วย secret เดียวกันด้วย ไม่ได้เปิดช่องให้ปลอมได้
+ * (ยังต้องรู้ secret อยู่ดี) แต่ไม่มีเหตุผลต้องรับของที่เราไม่เคยออก
+ */
+const JWT_ALGORITHM = 'HS256' satisfies jwt.Algorithm;
+
 export function signAccessToken(payload: AccessTokenPayload): string {
   return jwt.sign(payload, env.jwt.accessSecret, {
+    algorithm: JWT_ALGORITHM,
     expiresIn: env.jwt.accessExpires as jwt.SignOptions['expiresIn'],
   });
 }
 
 export function signRefreshToken(payload: RefreshTokenPayload): string {
   return jwt.sign(payload, env.jwt.refreshSecret, {
+    algorithm: JWT_ALGORITHM,
     expiresIn: env.jwt.refreshExpires as jwt.SignOptions['expiresIn'],
   });
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
   try {
-    const decoded = jwt.verify(token, env.jwt.accessSecret) as jwt.JwtPayload;
+    const decoded = jwt.verify(token, env.jwt.accessSecret, {
+      algorithms: [JWT_ALGORITHM],
+    }) as jwt.JwtPayload;
     return { sub: Number(decoded.sub), username: decoded.username, role: decoded.role };
   } catch {
     // ไม่แยกว่า "หมดอายุ" หรือ "ปลอม" — ทั้งคู่ให้ผู้ใช้ทำอย่างเดียวกันคือขอ token ใหม่
@@ -50,7 +61,9 @@ export function verifyAccessToken(token: string): AccessTokenPayload {
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
   try {
-    const decoded = jwt.verify(token, env.jwt.refreshSecret) as jwt.JwtPayload;
+    const decoded = jwt.verify(token, env.jwt.refreshSecret, {
+      algorithms: [JWT_ALGORITHM],
+    }) as jwt.JwtPayload;
     return { sub: Number(decoded.sub), jti: String(decoded.jti ?? '') };
   } catch {
     throw errors.unauthenticated('refresh token หมดอายุหรือไม่ถูกต้อง');

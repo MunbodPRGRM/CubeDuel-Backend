@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { dbIdSchema } from './common.schema.js';
 
 /**
  * กฎ validation ของข่าวสาร (docs/api-contract.md ข้อ 7)
@@ -30,10 +31,7 @@ export const newsListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(10),
 });
 
-export const newsIdParamSchema = z.coerce
-  .number({ invalid_type_error: 'newsId ต้องเป็นตัวเลข' })
-  .int()
-  .positive();
+export const newsIdParamSchema = dbIdSchema('newsId');
 
 export const createNewsSchema = z.object({ title, content, removeImage });
 

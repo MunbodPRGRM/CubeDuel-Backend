@@ -91,7 +91,7 @@ curl http://localhost:4000/api/v1/health
 | `FRONTEND_URL` | ตามค่า `CORS_ORIGIN` | OAuth redirect + ลิงก์รีเซ็ตรหัสผ่าน |
 | `DISABLE_RATE_LIMIT` | `false` | ตั้ง `true` เฉพาะตอน dev เวลายิงทดสอบรัว ๆ |
 | `ALLOW_TEST_COMPETITIVE_ROOM` | `0` | ตั้ง `1` ให้ `room:create` สร้างห้อง `competitive` ได้ ใช้กับ `npm run smoke:rated` ก่อนคิวจับคู่จะเสร็จ (ADR-038) — production ปิดตายเสมอ |
-| `DEV_INSTANT_FINISH` | `false` | ตั้ง `true` ให้ห้องแข่งมีปุ่ม "เสร็จทันที" (`solve:dev_finish`) ไว้ทดสอบ — ห้องที่ปรับคะแนนปรับ Elo ใน DB จริง (ADR-060) · production ปิดตายเสมอ · ⚠️ ถอดออกก่อน deploy |
+| `DEV_INSTANT_FINISH` | `false` | ตั้ง `true` ให้ห้องแข่งมีปุ่ม "เสร็จทันที" (`solve:dev_finish`) ไว้ทดสอบ — ห้องที่ปรับคะแนนปรับ Elo ใน DB จริง (ADR-060) · **เปิดบน production ได้ตั้งแต่ ADR-060 ข้อ 7** (เดิมปิดตาย) · ⚠️ ถอดออกก่อนส่ง |
 | `GOOGLE_*` / `FACEBOOK_*` | — | เฟส 2 (OAuth) |
 
 ## โครงสร้างโค้ด

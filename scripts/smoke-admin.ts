@@ -48,6 +48,12 @@ async function main(): Promise<void> {
   await clearReportsBetween(reporter.userId, target.userId);
   // เทสนี้แก้คะแนนของ target จริง (แก้ทีละประเภท + reset ทั้งชุด) → จำค่าเดิมไว้คืนตอนจบ
   const originalRatings = await prisma.rating.findMany({ where: { userId: target.userId } });
+  // ตั้ง bio ให้ผู้ถูกรายงานไว้ก่อน เพื่อทดสอบทั้ง "ถูกระงับแล้วซ่อน" (ข้อ 6) และ "แอดมินลบ" (ข้อ 6ก) — ADR-066
+  await api('/users/me', {
+    method: 'PATCH',
+    token: target.token,
+    body: { bio: 'ข้อความแนะนำตัวสำหรับสโมคเทส' },
+  });
   console.log('');
 
   // ---------------------------------------------------------------- รายงาน (ฝั่งผู้ใช้)
@@ -266,6 +272,15 @@ async function main(): Promise<void> {
   });
   check('ระงับสำเร็จ', (suspended.data as { status?: string })?.status === 'suspended', suspended);
 
+  const hiddenBio = await api(`/users/${target.userId}`);
+  check(
+    'บัญชีที่ถูกระงับ โปรไฟล์สาธารณะคืน bio = null',
+    (hiddenBio.data as { bio?: string | null })?.bio === null,
+    hiddenBio.data,
+  );
+  const bioInDb = await prisma.user.findUnique({ where: { userId: target.userId } });
+  check('แต่ข้อความจริงยังอยู่ใน DB (ปลดระงับแล้วได้คืน)', bioInDb?.bio !== null, bioInDb?.bio);
+
   const blockedLogin = await fetch(`${API}/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -285,6 +300,57 @@ async function main(): Promise<void> {
   const unsuspendedDto = unsuspended.data as { status?: string; suspendedUntil?: string | null };
   check('ปลดระงับสำเร็จ', unsuspendedDto?.status === 'active', unsuspended);
   check('ปลดระงับแล้วล้าง suspendedUntil', unsuspendedDto?.suspendedUntil === null);
+  const backBio = await api(`/users/${target.userId}`);
+  check(
+    'ปลดระงับแล้ว bio กลับมาแสดงเอง',
+    (backBio.data as { bio?: string | null })?.bio === 'ข้อความแนะนำตัวสำหรับสโมคเทส',
+    backBio.data,
+  );
+
+  // ---------------------------------------------------------------- ลบ bio (ADR-066)
+
+  console.log('\n6ก) ลบข้อความแนะนำตัวที่ไม่เหมาะสม');
+  const inList = await api(`/admin/users?q=malee`, { token: admin.token });
+  check(
+    'รายชื่อของแอดมินส่ง bio มาด้วย',
+    (inList.data as Array<{ userId: number; bio: string | null }>)?.find(
+      (u) => u.userId === target.userId,
+    )?.bio === 'ข้อความแนะนำตัวสำหรับสโมคเทส',
+    inList.data,
+  );
+
+  // นับ log ไว้ก่อน แล้วเทียบตอนท้าย — รันเทสซ้ำหลายรอบก็ยังเช็คได้ว่า "ลบซ้ำไม่เขียน log เปล่า"
+  const clearBioLogsBefore = await prisma.adminAuditLog.count({
+    where: { action: 'clear_bio', targetUserId: target.userId },
+  });
+
+  const memberClear = await api(`/admin/users/${target.userId}/bio`, {
+    method: 'DELETE',
+    token: reporter.token,
+  });
+  check('สมาชิกธรรมดาลบ bio คนอื่นไม่ได้ → 403', memberClear.status === 403, memberClear);
+
+  const cleared = await api(`/admin/users/${target.userId}/bio`, {
+    method: 'DELETE',
+    token: admin.token,
+  });
+  check(
+    'แอดมินลบสำเร็จ',
+    cleared.status === 200 && (cleared.data as { cleared?: boolean })?.cleared === true,
+    cleared,
+  );
+  const afterClear = await prisma.user.findUnique({ where: { userId: target.userId } });
+  check('bio ใน DB เป็น null แล้ว', afterClear?.bio === null, afterClear?.bio);
+
+  const again = await api(`/admin/users/${target.userId}/bio`, {
+    method: 'DELETE',
+    token: admin.token,
+  });
+  check(
+    'ลบซ้ำตอนไม่มี bio → 200 แต่ cleared = false',
+    again.status === 200 && (again.data as { cleared?: boolean })?.cleared === false,
+    again,
+  );
 
   // ---------------------------------------------------------------- ตัดสินรายงาน
 
@@ -397,7 +463,13 @@ async function main(): Promise<void> {
     orderBy: { createdAt: 'desc' },
   });
   const actions = new Set(logs.map((l) => l.action));
-  for (const action of ['edit_rating', 'suspend_user', 'unsuspend_user', 'resolve_report']) {
+  for (const action of [
+    'edit_rating',
+    'suspend_user',
+    'unsuspend_user',
+    'clear_bio',
+    'resolve_report',
+  ]) {
     check(`มี log ${action}`, actions.has(action), [...actions]);
   }
   if (flags?.length) check('มี log review_flag', actions.has('review_flag'), [...actions]);
@@ -407,6 +479,20 @@ async function main(): Promise<void> {
       l.action === 'edit_rating' && (l.detail as { before?: number } | null)?.before !== undefined,
   );
   check('log แก้คะแนนเก็บค่าเก่า/ค่าใหม่', editLog !== undefined, editLog?.detail);
+  const bioLog = logs.find((l) => l.action === 'clear_bio');
+  check(
+    'log ลบ bio เก็บข้อความเดิมไว้เป็นหลักฐาน',
+    (bioLog?.detail as { before?: string } | null)?.before === 'ข้อความแนะนำตัวสำหรับสโมคเทส',
+    bioLog?.detail,
+  );
+  const clearBioLogsNow = await prisma.adminAuditLog.count({
+    where: { action: 'clear_bio', targetUserId: target.userId },
+  });
+  check(
+    'ลบสำเร็จเขียน log ครั้งเดียว — ลบซ้ำตอนไม่มี bio ไม่เขียน log เปล่า',
+    clearBioLogsNow === clearBioLogsBefore + 1,
+    { before: clearBioLogsBefore, now: clearBioLogsNow },
+  );
   check(
     'log ผูกกับผู้ใช้ที่ถูกกระทำ',
     logs.filter((l) => l.action === 'suspend_user').every((l) => l.targetUserId !== null),

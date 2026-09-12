@@ -296,6 +296,8 @@ export async function deleteAccount(userId: number, password: string | undefined
         email: `deleted_${userId}@cubeduel.local`,
         passwordHash: null,
         nickname: null,
+        // ข้อความส่วนตัวต้องหายไปพร้อมบัญชี ไม่ใช่ค้างอยู่ใต้ชื่อ deleted_user_{id} (ADR-066 ข้อ 6)
+        bio: null,
       },
     });
     // ตัดการผูก Google/Facebook ทิ้ง ไม่งั้นล็อกอินกลับเข้ามาได้อีก

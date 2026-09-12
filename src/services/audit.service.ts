@@ -11,6 +11,8 @@ export type AuditAction =
   | 'suspend_user'
   | 'unsuspend_user'
   | 'edit_rating'
+  /** ลบข้อความแนะนำตัวที่ไม่เหมาะสม — `detail.before` เก็บข้อความเดิมไว้เป็นหลักฐาน (ADR-066 ข้อ 5) */
+  | 'clear_bio'
   | 'resolve_report'
   | 'review_flag'
   | 'create_news'

@@ -26,6 +26,7 @@ import {
   type ResolveReportInput,
 } from '../schemas/report.schema.js';
 import {
+  clearUserBio,
   getDashboard,
   getFlag,
   listFlags,
@@ -148,6 +149,15 @@ adminRouter.patch(
     const userId = userIdParamSchema.parse(req.params.userId);
     const input = req.body as UpdateUserRatingInput;
     res.json({ data: await setUserRating(currentUser(req).userId, userId, input) });
+  }),
+);
+
+/** ลบข้อความแนะนำตัวที่ไม่เหมาะสม — ไม่มี body เพราะแอดมินเขียนแทนผู้ใช้ไม่ได้ (ADR-066 ข้อ 5) */
+adminRouter.delete(
+  '/users/:userId/bio',
+  asyncHandler(async (req, res) => {
+    const userId = userIdParamSchema.parse(req.params.userId);
+    res.json({ data: await clearUserBio(currentUser(req).userId, userId) });
   }),
 );
 

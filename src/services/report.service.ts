@@ -52,7 +52,7 @@ export interface AdminReportDto {
   reportStatus: 'pending' | 'resolved';
   createdAt: string;
   reporter: ReportUserDto;
-  reported: ReportUserDto & { status: ApiUserStatus; reportCount: number };
+  reported: ReportUserDto & { bio: string | null; status: ApiUserStatus; reportCount: number };
   matchId: number | null;
   multiplayerMatchId: number | null;
   reviewedBy: number | null;
@@ -180,6 +180,8 @@ const adminReportInclude = {
       userId: true,
       username: true,
       nickname: true,
+      // รายงานเรื่อง "ข้อความแนะนำตัวไม่เหมาะสม" ต้องตัดสินได้ในหน้าเดียว ไม่ต้องเปิดโปรไฟล์อีกแท็บ (ADR-066 ข้อ 5)
+      bio: true,
       status: true,
       // แอดมินต้องเห็นว่าเป็นครั้งแรกหรือครั้งที่ 12 ก่อนตัดสิน
       _count: { select: { reportsAgainst: true } },
@@ -200,6 +202,7 @@ function toAdminReportDto(row: AdminReportRow): AdminReportDto {
       userId: row.reported.userId,
       username: row.reported.username,
       nickname: row.reported.nickname,
+      bio: row.reported.bio,
       status: USER_STATUS_TO_API[row.reported.status],
       reportCount: row.reported._count.reportsAgainst,
     },

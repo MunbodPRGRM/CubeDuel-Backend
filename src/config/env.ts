@@ -25,22 +25,30 @@ if (accessSecret === refreshSecret) {
 }
 
 /**
- * ส่งอีเมล (ADR-056) — `console` = พิมพ์ลง log แทนการส่งจริง ใช้ตอน dev ได้โดยไม่ต้องมีบัญชีอะไร
- * production ต้องเป็น `smtp` และตั้ง SMTP ครบ ไม่งั้นสตาร์ตไม่ขึ้น
- * (เงียบ ๆ ไม่ส่งอีเมลรีเซ็ตรหัสผ่านบน production แย่กว่าล้มตั้งแต่สตาร์ต)
+ * ส่งอีเมล (ADR-056 · แก้โดย ADR-067) — `console` = พิมพ์ลง log แทนการส่งจริง
+ *
+ * **`console` เป็นค่าเริ่มต้นทุกสภาพแวดล้อม รวม production** — อีเมลถูกใช้ที่เดียวคือลิงก์รีเซ็ตรหัสผ่าน
+ * และโปรเจกต์นี้ตัดสินใจไม่พึ่งอีเมลบนเครื่องที่ deploy จริง (ADR-067 ข้อ 2) · อยากส่งจริงค่อยตั้ง
+ * `EMAIL_TRANSPORT=smtp` แล้ว `SMTP_HOST/USER/PASS` ถึงจะกลายเป็นของบังคับ
+ *
+ * เดิม production บังคับ `smtp` ไม่งั้นสตาร์ตไม่ขึ้น — ถูกลบล้างแล้ว เหลือเป็นคำเตือนตอนสตาร์ตแทน (ข้อ 4)
  */
 function emailTransport(): 'smtp' | 'console' {
-  const value = process.env.EMAIL_TRANSPORT || (isProduction ? 'smtp' : 'console');
+  const value = process.env.EMAIL_TRANSPORT || 'console';
   if (value !== 'smtp' && value !== 'console') {
     throw new Error(`EMAIL_TRANSPORT ต้องเป็น smtp หรือ console (ได้ "${value}")`);
-  }
-  if (isProduction && value !== 'smtp') {
-    throw new Error('production ต้องตั้ง EMAIL_TRANSPORT=smtp — โหมด console ไม่ได้ส่งอีเมลจริง');
   }
   return value;
 }
 
 const mailTransport = emailTransport();
+
+// ยอมรับผลนี้โดยรู้ตัว ไม่ใช่ว่ามันไม่อันตรายแล้ว — ผู้ใช้รีเซ็ตรหัสผ่านเองไม่ได้ (ADR-067 ข้อ 3–4)
+if (isProduction && mailTransport === 'console') {
+  console.warn(
+    '[mail] EMAIL_TRANSPORT=console บน production — ลิงก์รีเซ็ตรหัสผ่านจะพิมพ์ลง log นี้ ไม่มีอีเมลออกไปหาผู้ใช้ (ADR-067)',
+  );
+}
 
 function smtpConfig() {
   const port = Number(process.env.SMTP_PORT || 465);

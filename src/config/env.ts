@@ -85,9 +85,15 @@ export const env = {
   allowTestCompetitiveRoom: !isProduction && process.env.ALLOW_TEST_COMPETITIVE_ROOM === '1',
   /**
    * ปุ่ม "เสร็จทันที" ในห้องแข่ง (`solve:dev_finish`) — **สำหรับทดสอบเท่านั้น** (เฟส 12 ก้อนที่ 3 · ADR-060)
-   * production ปิดตายเสมอไม่ว่าจะตั้งค่าไว้ยังไง · ⚠️ ถอดออกก่อน deploy
+   *
+   * เดิมบังคับ `!isProduction` ให้ปิดตายบน production แต่ตอนทดสอบบนเครื่องที่ deploy จริงต้องเปิด
+   * แล้วทางเลี่ยงเดียวคือตั้ง `NODE_ENV=development` ซึ่ง **แย่กว่ามาก** — cookie จะกลายเป็น
+   * `secure:false` + `sameSite:'lax'` ทำให้ refresh token ข้ามโดเมนไม่ติด ล็อกอินค้างไม่อยู่
+   * ยอมให้สวิตช์ตัวนี้เปิดเองได้ ดีกว่าไปหลอก `NODE_ENV` ซึ่งคุมอย่างอื่นอีกหลายเรื่อง (ADR-060 ข้อ 7)
+   *
+   * ⚠️ ยังต้องถอดทั้งชุดออกก่อนส่ง — เฟส 11 ข้อแรก · รายการไฟล์ครบใน ADR-060 ข้อ 6
    */
-  devInstantFinish: !isProduction && process.env.DEV_INSTANT_FINISH === 'true',
+  devInstantFinish: process.env.DEV_INSTANT_FINISH === 'true',
   nodeEnv,
   isProduction,
   /**

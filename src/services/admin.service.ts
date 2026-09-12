@@ -118,6 +118,11 @@ export interface AdminUserDto {
   userId: number;
   username: string;
   nickname: string | null;
+  /**
+   * ส่งมาเต็มเสมอ **แม้บัญชีถูกระงับ** (ต่างจากโปรไฟล์สาธารณะที่คืน `null`)
+   * — แอดมินต้องเห็นข้อความจริงก่อนตัดสินว่าจะลบ (ADR-066 ข้อ 5)
+   */
+  bio: string | null;
   email: string;
   role: ApiUserRole;
   status: ApiUserStatus;
@@ -140,6 +145,7 @@ function toAdminUserDto(user: AdminUserRow): AdminUserDto {
     userId: user.userId,
     username: user.username,
     nickname: user.nickname,
+    bio: user.bio,
     // endpoint ของแอดมินเท่านั้นที่ส่ง email ออกได้ (api-contract.md ข้อ 11)
     email: user.email,
     role: USER_ROLE_TO_API[user.role],
@@ -295,6 +301,39 @@ export async function setUserRating(
     before: rating.eloRating,
     after: input.eloRating,
   };
+}
+
+/**
+ * ลบข้อความแนะนำตัวที่ไม่เหมาะสม (api-contract.md ข้อ 9 · ADR-066 ข้อ 5)
+ *
+ * **มีแค่ "ลบ" ไม่มี "แก้"** — ถ้าแอดมินเขียน bio แทนผู้ใช้ได้ ข้อความในโปรไฟล์ก็เชื่อไม่ได้อีกต่อไป
+ * ว่าเป็นของเจ้าของบัญชี · `detail.before` เก็บข้อความเดิมไว้ ไม่งั้นลบแล้วไม่เหลือหลักฐานตอนมีคนมาโต้แย้ง
+ */
+export async function clearUserBio(
+  adminId: number,
+  userId: number,
+): Promise<{ userId: number; bio: null; cleared: boolean }> {
+  // บัญชีที่ลบตัวเองแล้วถือว่าไม่มีอยู่ — bio ถูกล้างไปตั้งแต่ตอนลบบัญชีอยู่แล้ว (ADR-066 ข้อ 6)
+  const user = await prisma.user.findFirst({
+    where: { userId, deletedAt: null },
+    select: { bio: true },
+  });
+  if (!user) throw errors.notFound('ไม่พบผู้ใช้รายนี้');
+
+  // ไม่มีอะไรให้ลบ → ตอบ 200 เหมือนกัน แต่ไม่เขียน log ที่ไม่มีความหมายทิ้งไว้
+  if (user.bio === null) return { userId, bio: null, cleared: false };
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { userId }, data: { bio: null } });
+    await writeAuditLog(tx, {
+      adminId,
+      action: 'clear_bio',
+      targetUserId: userId,
+      detail: { before: user.bio },
+    });
+  });
+
+  return { userId, bio: null, cleared: true };
 }
 
 async function readAdminUser(userId: number): Promise<AdminUserDto> {

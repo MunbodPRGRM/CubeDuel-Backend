@@ -22,6 +22,11 @@ export interface PublicUserDto {
   userId: number;
   username: string;
   nickname: string | null;
+  /**
+   * ข้อความแนะนำตัว — **ข้อความล้วน** ฝั่งแสดงผลห้าม render เป็น HTML และไม่ทำ auto-link (ADR-066 ข้อ 3)
+   * บัญชีที่ถูกระงับต้องได้ `null` ตรงนี้ — คุมที่ `getPublicProfile()` ไม่ใช่ที่ตัวแปลงนี้ (ADR-066 ข้อ 6)
+   */
+  bio: string | null;
   role: ApiUserRole;
   createdAt: string;
 }
@@ -43,6 +48,7 @@ export function toPublicUser(user: User): PublicUserDto {
     userId: user.userId,
     username: user.username,
     nickname: user.nickname,
+    bio: user.bio,
     role: USER_ROLE_TO_API[user.role],
     createdAt: user.createdAt.toISOString(),
   };

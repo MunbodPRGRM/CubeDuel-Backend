@@ -331,6 +331,11 @@ function access(f: Fixture): Record<string, Access> {
       body: {},
       passStatus: 400,
     },
+    'DELETE /admin/users/:userId/bio': {
+      level: 'admin',
+      path: `/admin/users/${ghost}/bio`,
+      passStatus: 404,
+    },
     'GET /admin/reports': { level: 'admin', path: '/admin/reports', passStatus: 200 },
     'PATCH /admin/reports/:reportId': {
       level: 'admin',

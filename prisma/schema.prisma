@@ -89,6 +89,8 @@ model User {
   /// NULL ได้ — ผู้ใช้ OAuth ไม่มีรหัสผ่าน (ตอน login ต้องตอบว่า "บัญชีนี้ใช้ Google/Facebook")
   passwordHash   String?    @map("password_hash") @db.VarChar(255)
   nickname       String?    @db.VarChar(50)
+  /// ข้อความแนะนำตัวที่ผู้ใช้เขียนเอง — ข้อความล้วน ไม่ใช่ HTML · normalize + จำกัด 300 ตัว/6 บรรทัดที่ zod (ADR-066)
+  bio            String?    @db.VarChar(300)
   role           UserRole   @default(MEMBER)
   status         UserStatus @default(ACTIVE)
   cubeSkin       String     @default("classic") @map("cube_skin") @db.VarChar(30)
@@ -370,7 +372,7 @@ model MatchFlag {
 model AdminAuditLog {
   logId        Int      @id @default(autoincrement()) @map("log_id")
   adminId      Int      @map("admin_id")
-  /// suspend_user | unsuspend_user | edit_rating | resolve_report | review_flag | create_news | update_news | delete_news
+  /// suspend_user | unsuspend_user | edit_rating | clear_bio | resolve_report | review_flag | create_news | update_news | delete_news
   action       String   @db.VarChar(50)
   targetUserId Int?     @map("target_user_id")
   /// { "cubeType": "3x3x3", "before": 1210, "after": 1200, "note": "..." }

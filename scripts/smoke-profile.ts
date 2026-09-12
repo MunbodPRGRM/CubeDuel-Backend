@@ -1,5 +1,6 @@
 /**
  * สโมคเทสเฟส 8 ก้อนที่ 1 — `PATCH /users/me` (ชื่อเล่น + สกินสีคิวบ์)
+ * · เฟส 12 ก้อนที่ 9 เพิ่มข้อ 7–8: `bio` (ADR-066)
  *
  * ยิงผ่าน REST เหมือนเบราว์เซอร์จริง ไม่เรียกฟังก์ชันฝั่ง server ตรง ๆ
  * ต้องรัน `npm run dev` กับ `npm run seed` ไว้ก่อน
@@ -12,6 +13,7 @@ interface SelfUser {
   userId: number;
   username: string;
   nickname: string | null;
+  bio: string | null;
   cubeSkin: string;
   email: string;
 }
@@ -89,16 +91,45 @@ async function main(): Promise<void> {
   });
   check('ไม่ล็อกอิน → 401', anon.status === 401, anon.status);
 
-  console.log('\n6) ล้างชื่อเล่นด้วยช่องว่าง แล้วคืนค่าเดิม');
+  console.log('\n6) bio — normalize + เห็นในโปรไฟล์สาธารณะ');
+  // \r\n ต้องกลายเป็น \n · ช่องว่างท้ายบรรทัดหาย · บรรทัดว่างซ้อนเหลือหนึ่ง · zero-width ถูกตัดทิ้ง (ADR-066 ข้อ 4)
+  const messy = 'บรรทัดหนึ่ง   \r\n\n\n\u200bบรรทัดสอง\u202e   ';
+  const withBio = await patchProfile(token, { bio: messy });
+  check('ตอบ 200', withBio.status === 200, withBio);
+  check(
+    'normalize แล้วได้ข้อความสะอาด',
+    withBio.data?.bio === 'บรรทัดหนึ่ง\n\nบรรทัดสอง',
+    JSON.stringify(withBio.data?.bio),
+  );
+  const pubWithBio = await getJson<Record<string, unknown>>(`/users/${userId}`);
+  check('โปรไฟล์สาธารณะเห็น bio', pubWithBio.bio === 'บรรทัดหนึ่ง\n\nบรรทัดสอง', pubWithBio.bio);
+
+  const keepBio = await patchProfile(token, { cubeSkin: 'classic' });
+  check('ไม่ส่ง bio มา = ไม่แตะ', keepBio.data?.bio === 'บรรทัดหนึ่ง\n\nบรรทัดสอง', keepBio.data?.bio);
+
+  console.log('\n7) bio ที่ไม่ผ่านกติกา');
+  const longBio = await patchProfile(token, { bio: 'ก'.repeat(301) });
+  check('เกิน 300 ตัว → 400', longBio.status === 400 && longBio.code === 'E_VALIDATION', longBio);
+  const manyLines = await patchProfile(token, { bio: 'ก\nข\nค\nง\nจ\nฉ\nช' });
+  check('เกิน 6 บรรทัด → 400', manyLines.status === 400, manyLines);
+  const exactly300 = await patchProfile(token, { bio: 'ก'.repeat(300) });
+  check('300 ตัวพอดียังผ่าน', exactly300.status === 200, exactly300.status);
+  const clearedBio = await patchProfile(token, { bio: '  \n\n  ' });
+  check('ช่องว่างล้วน = null', clearedBio.data?.bio === null, clearedBio.data?.bio);
+
+  console.log('\n8) ล้างชื่อเล่นด้วยช่องว่าง แล้วคืนค่าเดิม');
   const cleared = await patchProfile(token, { nickname: '   ' });
   check('ช่องว่างล้วน = null', cleared.data?.nickname === null, cleared.data?.nickname);
   const restored = await patchProfile(token, {
     nickname: before.nickname,
+    bio: before.bio,
     cubeSkin: before.cubeSkin,
   });
   check(
     'คืนค่าเดิมได้ครบ',
-    restored.data?.nickname === before.nickname && restored.data?.cubeSkin === before.cubeSkin,
+    restored.data?.nickname === before.nickname &&
+      restored.data?.bio === before.bio &&
+      restored.data?.cubeSkin === before.cubeSkin,
     restored.data,
   );
 

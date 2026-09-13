@@ -284,6 +284,13 @@ function access(f: Fixture): Record<string, Access> {
       path: '/auth/oauth/google/callback',
       passStatus: 302,
     },
+    // กติกาเดียวกับ Google (ADR-070)
+    'GET /auth/oauth/facebook': { level: 'public', path: '/auth/oauth/facebook', passStatus: 302 },
+    'GET /auth/oauth/facebook/callback': {
+      level: 'public',
+      path: '/auth/oauth/facebook/callback',
+      passStatus: 302,
+    },
 
     'GET /users/me': { level: 'member', path: '/users/me', passStatus: 200 },
     'PATCH /users/me': { level: 'member', path: '/users/me', body: {}, passStatus: 400 },

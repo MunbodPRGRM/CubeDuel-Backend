@@ -1,18 +1,21 @@
 /**
- * unit test ของตรรกะล้วนในการเข้าสู่ระบบด้วย Google — ADR-058
+ * unit test ของตรรกะล้วนในการเข้าสู่ระบบด้วย Google (ADR-058) / Facebook (ADR-070)
  *
- * ส่วนที่คุยกับ Google/DB จริงอยู่ใน `npm run smoke:oauth`
+ * ส่วนที่คุยกับ provider/DB จริงอยู่ใน `npm run smoke:oauth`
  */
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
 import {
   DEFAULT_RETURN_TO,
   OAUTH_USERNAME_BASE_MAX,
   decodeFlowCookie,
   encodeFlowCookie,
+  facebookAppSecretProof,
   frontendUrlFor,
   loginErrorUrl,
   pkceChallenge,
+  readFacebookProfile,
   readGoogleIdToken,
   safeReturnTo,
   usernameBaseFromEmail,
@@ -53,6 +56,13 @@ describe('frontendUrlFor / loginErrorUrl', () => {
   it('FRONTEND_URL มี / ต่อท้ายก็ไม่กลายเป็น //', () => {
     assert.equal(frontendUrlFor('http://localhost:5173/', '/practice'), 'http://localhost:5173/practice');
     assert.equal(loginErrorUrl('http://x.test', 'cancelled'), 'http://x.test/login?oauth_error=cancelled');
+  });
+
+  it('แนบ provider เมื่อรู้ว่ามาจากปุ่มไหน (ADR-070 ข้อ 5)', () => {
+    assert.equal(
+      loginErrorUrl('http://x.test', 'email_missing', 'facebook'),
+      'http://x.test/login?oauth_error=email_missing&provider=facebook',
+    );
   });
 });
 
@@ -146,6 +156,46 @@ describe('readGoogleIdToken', () => {
   it('ไม่ใช่ JWT → throw', () => {
     assert.throws(() => readGoogleIdToken('abc', CLIENT_ID, NOW));
     assert.throws(() => readGoogleIdToken('a.!!!.c', CLIENT_ID, NOW));
+  });
+});
+
+describe('readFacebookProfile', () => {
+  const valid = { id: '10223344556677889', name: '  นที เฟซบุ๊ก ', email: 'Natakrit@Example.COM' };
+
+  it('อ่านผล /me + ทำอีเมลเป็นตัวพิมพ์เล็ก · มีอีเมล = ถือว่ายืนยันแล้ว (ADR-070 ข้อ 3)', () => {
+    assert.deepEqual(readFacebookProfile(valid), {
+      sub: '10223344556677889',
+      email: 'natakrit@example.com',
+      emailVerified: true,
+      name: 'นที เฟซบุ๊ก',
+    });
+  });
+
+  it('ไม่มีอีเมล (สมัครด้วยเบอร์โทร / ไม่ให้สิทธิ์) → email null + ไม่ยืนยัน แต่ไม่ throw', () => {
+    for (const email of [undefined, '', 'not-an-email']) {
+      const profile = readFacebookProfile({ ...valid, email });
+      assert.equal(profile.email, null, JSON.stringify(email));
+      assert.equal(profile.emailVerified, false);
+      assert.equal(profile.sub, valid.id);
+    }
+  });
+
+  it('ไม่มีชื่อ → null', () => {
+    assert.equal(readFacebookProfile({ ...valid, name: undefined }).name, null);
+  });
+
+  it('id หาย / ไม่ใช่ตัวเลข / ผลไม่ใช่ object → throw', () => {
+    for (const body of [null, 'x', { ...valid, id: undefined }, { ...valid, id: 123 }, { ...valid, id: 'abc' }, { ...valid, id: '' }]) {
+      assert.throws(() => readFacebookProfile(body), Error, JSON.stringify(body));
+    }
+  });
+});
+
+describe('facebookAppSecretProof', () => {
+  it('= HMAC-SHA256(access_token) ด้วย app secret เป็น hex', () => {
+    const expected = createHmac('sha256', 'app-secret').update('token-123').digest('hex');
+    assert.equal(facebookAppSecretProof('token-123', 'app-secret'), expected);
+    assert.match(expected, /^[0-9a-f]{64}$/);
   });
 });
 

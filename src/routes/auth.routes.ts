@@ -1,3 +1,4 @@
+import { OAuthProvider } from '@prisma/client';
 import { Router, type CookieOptions, type Request, type Response } from 'express';
 import { env } from '../config/env.js';
 import {
@@ -17,6 +18,8 @@ import {
   pkceChallenge,
   safeReturnTo,
   type OAuthErrorCode,
+  type OAuthProfile,
+  type OAuthProviderSlug,
 } from '../lib/oauth.js';
 import { generateOpaqueToken } from '../lib/tokens.js';
 import { asyncHandler } from '../middleware/async-handler.js';
@@ -174,10 +177,10 @@ authRouter.post(
   }),
 );
 
-// ---------------------------------------------------------------- เข้าสู่ระบบด้วย Google (ADR-058)
+// ---------------------------------------------------------------- เข้าสู่ระบบด้วย Google (ADR-058) / Facebook (ADR-070)
 
 /**
- * `Lax` ไม่ใช่ `none`/`strict` — Google พากลับมาด้วย top-level GET ข้ามเว็บ
+ * `Lax` ไม่ใช่ `none`/`strict` — provider พากลับมาด้วย top-level GET ข้ามเว็บ
  * `strict` จะไม่ส่ง cookie นี้มาด้วย ส่วน `lax` ส่ง (ADR-058 ข้อ 2)
  */
 function oauthCookieOptions(): CookieOptions {
@@ -190,55 +193,84 @@ function oauthCookieOptions(): CookieOptions {
   };
 }
 
-/** สอง endpoint นี้เป็นการเปิดหน้าเว็บ ไม่ใช่ fetch — ผิดพลาดแล้วพากลับหน้าเข้าสู่ระบบ ไม่ตอบ JSON */
-function redirectToLoginError(res: Response, code: OAuthErrorCode) {
-  res.redirect(302, loginErrorUrl(env.frontendUrl, code));
+/** endpoint พวกนี้เป็นการเปิดหน้าเว็บ ไม่ใช่ fetch — ผิดพลาดแล้วพากลับหน้าเข้าสู่ระบบ ไม่ตอบ JSON */
+function redirectToLoginError(res: Response, code: OAuthErrorCode, provider: OAuthProviderSlug) {
+  res.redirect(302, loginErrorUrl(env.frontendUrl, code, provider));
 }
 
-authRouter.get('/oauth/google', oauthLimiter, (req, res) => {
-  if (!env.google) return redirectToLoginError(res, 'unavailable');
+/** สิ่งที่ต่างกันระหว่าง provider — ที่เหลือ (cookie · state · returnTo · หาบัญชี) ใช้ร่วมกันหมด */
+interface OAuthRouteProvider {
+  slug: OAuthProviderSlug;
+  provider: OAuthProvider;
+  isConfigured: () => boolean;
+  authUrl: (state: string, codeChallenge: string) => string;
+  exchange: (code: string, codeVerifier: string) => Promise<OAuthProfile>;
+}
 
-  const flow = {
-    state: generateOpaqueToken(32),
-    verifier: generateOpaqueToken(32),
-    returnTo: safeReturnTo(req.query.returnTo),
-  };
-  res.cookie(OAUTH_COOKIE_NAME, encodeFlowCookie(flow), oauthCookieOptions());
-  res.redirect(302, oauth.googleAuthUrl(flow.state, pkceChallenge(flow.verifier)));
+/** path ตายตัวต่อ provider ไม่ใช่ `/:provider` (ADR-058 ข้อ 1 · ADR-070 ข้อ 1) */
+function mountOAuthRoutes({ slug, provider, isConfigured, authUrl, exchange }: OAuthRouteProvider) {
+  authRouter.get(`/oauth/${slug}`, oauthLimiter, (req, res) => {
+    if (!isConfigured()) return redirectToLoginError(res, 'unavailable', slug);
+
+    const flow = {
+      state: generateOpaqueToken(32),
+      verifier: generateOpaqueToken(32),
+      returnTo: safeReturnTo(req.query.returnTo),
+    };
+    res.cookie(OAUTH_COOKIE_NAME, encodeFlowCookie(flow), oauthCookieOptions());
+    res.redirect(302, authUrl(flow.state, pkceChallenge(flow.verifier)));
+  });
+
+  authRouter.get(
+    `/oauth/${slug}/callback`,
+    oauthLimiter,
+    asyncHandler(async (req, res) => {
+      const flow = decodeFlowCookie(req.cookies?.[OAUTH_COOKIE_NAME]);
+      // ใช้ได้รอบเดียว — ลบทิ้งทุกกรณี ไม่ว่าผลจะเป็นอะไร
+      res.clearCookie(OAUTH_COOKIE_NAME, { path: OAUTH_COOKIE_PATH });
+
+      if (!isConfigured()) return redirectToLoginError(res, 'unavailable', slug);
+
+      const { code, state, error } = req.query;
+      // Google กับ Facebook ใช้ `error=access_denied` เหมือนกันตอนผู้ใช้กดยกเลิก
+      if (typeof error === 'string') {
+        return redirectToLoginError(res, error === 'access_denied' ? 'cancelled' : 'failed', slug);
+      }
+      // state ต้องตรงกับที่เราตั้งไว้ในเบราว์เซอร์นี้ — กันคนยิงลิงก์ callback ของตัวเองมาให้เหยื่อกด (login CSRF)
+      if (!flow || typeof state !== 'string' || state !== flow.state || typeof code !== 'string' || !code) {
+        return redirectToLoginError(res, 'invalid_state', slug);
+      }
+
+      try {
+        const profile = await exchange(code, flow.verifier);
+        const session = await oauth.signInWithOAuth(provider, profile, deviceLabel(req));
+        // ไม่มี token ใน URL — หน้าเว็บที่เปิดใหม่ขอ access token เองด้วย cookie นี้ (ADR-058 ข้อ 3)
+        res.cookie(REFRESH_COOKIE_NAME, session.refreshToken, refreshCookieOptions());
+        res.redirect(302, frontendUrlFor(env.frontendUrl, flow.returnTo));
+      } catch (err) {
+        if (err instanceof oauth.OAuthFlowError) return redirectToLoginError(res, err.code, slug);
+        if (err instanceof AppError && err.code === 'E_ACCOUNT_SUSPENDED') {
+          return redirectToLoginError(res, 'suspended', slug);
+        }
+        console.error(`[oauth/${slug}]`, err);
+        redirectToLoginError(res, 'failed', slug);
+      }
+    }),
+  );
+}
+
+mountOAuthRoutes({
+  slug: 'google',
+  provider: OAuthProvider.GOOGLE,
+  isConfigured: () => env.google !== null,
+  authUrl: oauth.googleAuthUrl,
+  exchange: oauth.exchangeGoogleCode,
 });
 
-authRouter.get(
-  '/oauth/google/callback',
-  oauthLimiter,
-  asyncHandler(async (req, res) => {
-    const flow = decodeFlowCookie(req.cookies?.[OAUTH_COOKIE_NAME]);
-    // ใช้ได้รอบเดียว — ลบทิ้งทุกกรณี ไม่ว่าผลจะเป็นอะไร
-    res.clearCookie(OAUTH_COOKIE_NAME, { path: OAUTH_COOKIE_PATH });
-
-    if (!env.google) return redirectToLoginError(res, 'unavailable');
-
-    const { code, state, error } = req.query;
-    if (typeof error === 'string') {
-      return redirectToLoginError(res, error === 'access_denied' ? 'cancelled' : 'failed');
-    }
-    // state ต้องตรงกับที่เราตั้งไว้ในเบราว์เซอร์นี้ — กันคนยิงลิงก์ callback ของตัวเองมาให้เหยื่อกด (login CSRF)
-    if (!flow || typeof state !== 'string' || state !== flow.state || typeof code !== 'string' || !code) {
-      return redirectToLoginError(res, 'invalid_state');
-    }
-
-    try {
-      const profile = await oauth.exchangeGoogleCode(code, flow.verifier);
-      const session = await oauth.signInWithGoogle(profile, deviceLabel(req));
-      // ไม่มี token ใน URL — หน้าเว็บที่เปิดใหม่ขอ access token เองด้วย cookie นี้ (ADR-058 ข้อ 3)
-      res.cookie(REFRESH_COOKIE_NAME, session.refreshToken, refreshCookieOptions());
-      res.redirect(302, frontendUrlFor(env.frontendUrl, flow.returnTo));
-    } catch (err) {
-      if (err instanceof oauth.OAuthFlowError) return redirectToLoginError(res, err.code);
-      if (err instanceof AppError && err.code === 'E_ACCOUNT_SUSPENDED') {
-        return redirectToLoginError(res, 'suspended');
-      }
-      console.error('[oauth/google]', err);
-      redirectToLoginError(res, 'failed');
-    }
-  }),
-);
+mountOAuthRoutes({
+  slug: 'facebook',
+  provider: OAuthProvider.FACEBOOK,
+  isConfigured: () => env.facebook !== null,
+  authUrl: oauth.facebookAuthUrl,
+  exchange: oauth.exchangeFacebookCode,
+});

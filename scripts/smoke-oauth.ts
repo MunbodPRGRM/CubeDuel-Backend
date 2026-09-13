@@ -1,26 +1,28 @@
 /**
- * สโมคเทสเข้าสู่ระบบด้วย Google (เฟส 2 — ADR-058)
+ * สโมคเทสเข้าสู่ระบบด้วย Google (เฟส 2 — ADR-058) + Facebook (ADR-070)
  *
  * ต้องรัน `npm run dev` ไว้ก่อน · ควรเปิด server ด้วย `DISABLE_RATE_LIMIT=true`
  *
- * ขาที่แลก `code` กับ Google จริงทดสอบอัตโนมัติไม่ได้ — ไม่มีทางได้ code ของจริงโดยไม่มีคนกดเลือกบัญชี
+ * ขาที่แลก `code` กับ provider จริงทดสอบอัตโนมัติไม่ได้ — ไม่มีทางได้ code ของจริงโดยไม่มีคนกดเลือกบัญชี
  * จึงแบ่งเป็นสองส่วน:
  *   1. ผ่านสาย HTTP — ขาเริ่ม (redirect · cookie · PKCE · returnTo) และ callback ทุกทางที่ผิด
- *   2. เรียก `signInWithGoogle()` ตรง ๆ ด้วยข้อมูล Google ปลอม — ตรรกะหา/ผูก/สร้างบัญชีทั้งหมด
+ *   2. เรียก `signInWithOAuth()` ตรง ๆ ด้วยข้อมูล provider ปลอม — ตรรกะหา/ผูก/สร้างบัญชีทั้งหมด
  *      (ข้อยกเว้นของ `smoke-helpers.ts` ที่ว่าห้ามเรียกฟังก์ชันฝั่ง server) แล้วเอา token ที่ได้ไปยิง endpoint จริงต่อ
  * บัญชีทดสอบสร้างใหม่ทุกรอบแล้วลบทิ้งตอนจบ
  *
  *   npm run smoke:oauth
  */
-import { PrismaClient, UserStatus } from '@prisma/client';
+import { OAuthProvider, PrismaClient, UserStatus } from '@prisma/client';
 import { AppError } from '../src/lib/errors.js';
-import { decodeFlowCookie, pkceChallenge, type GoogleProfile } from '../src/lib/oauth.js';
+import { decodeFlowCookie, pkceChallenge, type OAuthProfile } from '../src/lib/oauth.js';
 import { hashPassword } from '../src/lib/password.js';
 import { hashToken } from '../src/lib/tokens.js';
-import { OAuthFlowError, signInWithGoogle } from '../src/services/oauth.service.js';
+import { OAuthFlowError, signInWithOAuth } from '../src/services/oauth.service.js';
 import { API, check, summary } from './smoke-helpers.js';
 
 const prisma = new PrismaClient();
+const signInWithGoogle = (profile: OAuthProfile) => signInWithOAuth(OAuthProvider.GOOGLE, profile);
+const signInWithFacebook = (profile: OAuthProfile) => signInWithOAuth(OAuthProvider.FACEBOOK, profile);
 const PASSWORD = 'LinkPass123';
 const NEW_PASSWORD = 'GooglePass456';
 
@@ -63,6 +65,7 @@ function cookieValue(cookies: string[], name: string): string | undefined {
 }
 
 const errorOf = (location: string) => new URL(location).searchParams.get('oauth_error');
+const providerOf = (location: string) => new URL(location).searchParams.get('provider');
 
 async function expectFlowError(label: string, run: Promise<unknown>, test: (err: unknown) => boolean) {
   try {
@@ -75,57 +78,87 @@ async function expectFlowError(label: string, run: Promise<unknown>, test: (err:
 
 // ------------------------------------------------------------------ ส่วนที่ 1: HTTP
 
-async function httpFlow(): Promise<void> {
-  console.log('1) ขาเริ่ม GET /auth/oauth/google');
-  const start = await call('GET', '/auth/oauth/google?returnTo=/practice');
+interface HttpProvider {
+  slug: 'google' | 'facebook';
+  label: string;
+  envName: string;
+  authUrl: string;
+  /** ตรวจเพิ่มเฉพาะ provider */
+  extra: (q: URLSearchParams) => void;
+}
+
+const HTTP_PROVIDERS: HttpProvider[] = [
+  {
+    slug: 'google',
+    label: 'Google',
+    envName: 'GOOGLE_CLIENT_ID/SECRET',
+    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    extra: (q) => check('prompt=select_account', q.get('prompt') === 'select_account'),
+  },
+  {
+    slug: 'facebook',
+    label: 'Facebook',
+    envName: 'FACEBOOK_CLIENT_ID/SECRET',
+    authUrl: 'https://www.facebook.com/v25.0/dialog/oauth',
+    extra: (q) => check('auth_type=rerequest (ถามสิทธิ์อีเมลใหม่ได้ — ADR-070 ข้อ 2)', q.get('auth_type') === 'rerequest'),
+  },
+];
+
+async function httpFlow({ slug, label, envName, authUrl, extra }: HttpProvider): Promise<void> {
+  const base = `/auth/oauth/${slug}`;
+  console.log(`\n[${label}] 1) ขาเริ่ม GET ${base}`);
+  const start = await call('GET', `${base}?returnTo=/practice`);
   check('ตอบ 302', start.status === 302, start.status);
 
   if (start.location.includes('oauth_error=unavailable')) {
-    console.log('  ⏭️  server ไม่ได้ตั้ง GOOGLE_CLIENT_ID/SECRET — ตรวจได้แค่ว่าพากลับหน้าเข้าสู่ระบบ');
-    const cb = await call('GET', '/auth/oauth/google/callback?code=x&state=y');
+    console.log(`  ⏭️  server ไม่ได้ตั้ง ${envName} — ตรวจได้แค่ว่าพากลับหน้าเข้าสู่ระบบ`);
+    check(`แนบ provider=${slug}`, providerOf(start.location) === slug, start.location);
+    const cb = await call('GET', `${base}/callback?code=x&state=y`);
     check('callback ก็ตอบ unavailable', errorOf(cb.location) === 'unavailable', cb.location);
     return;
   }
 
-  const google = new URL(start.location);
-  check('ไปหน้าเลือกบัญชีของ Google', google.origin + google.pathname === 'https://accounts.google.com/o/oauth2/v2/auth', start.location);
-  const q = google.searchParams;
+  const target = new URL(start.location);
+  check(`ไปหน้าของ ${label}`, target.origin + target.pathname === authUrl, start.location);
+  const q = target.searchParams;
   check('response_type=code + scope มี email', q.get('response_type') === 'code' && /\bemail\b/.test(q.get('scope') ?? ''));
-  check('redirect_uri ชี้มา callback ของเรา', (q.get('redirect_uri') ?? '').endsWith('/api/v1/auth/oauth/google/callback'), q.get('redirect_uri'));
+  check('redirect_uri ชี้มา callback ของเรา', (q.get('redirect_uri') ?? '').endsWith(`/api/v1${base}/callback`), q.get('redirect_uri'));
   check('PKCE แบบ S256', q.get('code_challenge_method') === 'S256' && !!q.get('code_challenge'));
+  extra(q);
 
   const rawCookie = start.cookies.find((c) => c.startsWith('cubeduel_oauth='));
   check('ตั้ง cookie cubeduel_oauth', !!rawCookie, start.cookies);
   check('cookie: HttpOnly · SameSite=Lax · path เฉพาะ /api/v1/auth/oauth', !!rawCookie && /HttpOnly/i.test(rawCookie) && /SameSite=Lax/i.test(rawCookie) && /Path=\/api\/v1\/auth\/oauth/i.test(rawCookie), rawCookie);
   const flow = decodeFlowCookie(cookieValue(start.cookies, 'cubeduel_oauth'));
-  check('state ใน cookie ตรงกับที่ส่งให้ Google', flow?.state === q.get('state'), flow);
+  check('state ใน cookie ตรงกับที่ส่งให้ provider', flow?.state === q.get('state'), flow);
   check('code_challenge = SHA256(verifier ใน cookie)', !!flow && pkceChallenge(flow.verifier) === q.get('code_challenge'));
   check('returnTo ถูกจำไว้', flow?.returnTo === '/practice', flow?.returnTo);
 
-  const evil = await call('GET', `/auth/oauth/google?returnTo=${encodeURIComponent('//evil.com')}`);
+  const evil = await call('GET', `${base}?returnTo=${encodeURIComponent('//evil.com')}`);
   check('returnTo=//evil.com → จำเป็น / (กัน open redirect)', decodeFlowCookie(cookieValue(evil.cookies, 'cubeduel_oauth'))?.returnTo === '/');
 
   const cookie = `cubeduel_oauth=${encodeURIComponent(cookieValue(start.cookies, 'cubeduel_oauth')!)}`;
   const state = encodeURIComponent(flow?.state ?? '');
 
-  console.log('\n2) callback ทางที่ผิด');
-  const noCookie = await call('GET', `/auth/oauth/google/callback?code=abc&state=${state}`);
+  console.log(`\n[${label}] 2) callback ทางที่ผิด`);
+  const noCookie = await call('GET', `${base}/callback?code=abc&state=${state}`);
   check('ไม่มี cookie → invalid_state', noCookie.status === 302 && errorOf(noCookie.location) === 'invalid_state', noCookie.location);
   check('พากลับหน้า /login ของเว็บ', new URL(noCookie.location).pathname === '/login', noCookie.location);
+  check(`แนบ provider=${slug} (ADR-070 ข้อ 5)`, providerOf(noCookie.location) === slug, noCookie.location);
 
-  const wrongState = await call('GET', '/auth/oauth/google/callback?code=abc&state=forged', { cookie });
+  const wrongState = await call('GET', `${base}/callback?code=abc&state=forged`, { cookie });
   check('state ไม่ตรง → invalid_state', errorOf(wrongState.location) === 'invalid_state', wrongState.location);
   check('cookie ถูกลบทิ้งหลัง callback', wrongState.cookies.some((c) => c.startsWith('cubeduel_oauth=;') && /Expires=Thu, 01 Jan 1970/i.test(c)), wrongState.cookies);
 
-  const denied = await call('GET', `/auth/oauth/google/callback?error=access_denied&state=${state}`, { cookie });
-  check('ผู้ใช้กดยกเลิกที่ Google → cancelled', errorOf(denied.location) === 'cancelled', denied.location);
+  const denied = await call('GET', `${base}/callback?error=access_denied&state=${state}`, { cookie });
+  check('ผู้ใช้กดยกเลิกที่ provider → cancelled', errorOf(denied.location) === 'cancelled', denied.location);
 
-  const noCode = await call('GET', `/auth/oauth/google/callback?state=${state}`, { cookie });
+  const noCode = await call('GET', `${base}/callback?state=${state}`, { cookie });
   check('ไม่มี code → invalid_state', errorOf(noCode.location) === 'invalid_state', noCode.location);
 
-  // state ถูกต้อง แต่ code ปลอม → server ยิงไปแลกกับ Google จริงแล้วโดนปฏิเสธ
-  const bogus = await call('GET', `/auth/oauth/google/callback?code=bogus-code&state=${state}`, { cookie });
-  check('code ปลอม → failed (Google ปฏิเสธ · ดู log ของ server)', errorOf(bogus.location) === 'failed', bogus.location);
+  // state ถูกต้อง แต่ code ปลอม → server ยิงไปแลกกับ provider จริงแล้วโดนปฏิเสธ
+  const bogus = await call('GET', `${base}/callback?code=bogus-code&state=${state}`, { cookie });
+  check(`code ปลอม → failed (${label} ปฏิเสธ · ดู log ของ server)`, errorOf(bogus.location) === 'failed', bogus.location);
   check('ไม่ออก refresh cookie ให้', !bogus.cookies.some((c) => c.startsWith('cubeduel_refresh=') && !c.startsWith('cubeduel_refresh=;')), bogus.cookies);
 }
 
@@ -133,7 +166,7 @@ async function httpFlow(): Promise<void> {
 
 async function accountFlow(stamp: number, created: Set<number>): Promise<void> {
   let n = 0;
-  const profile = (over: Partial<GoogleProfile> = {}): GoogleProfile => ({
+  const profile = (over: Partial<OAuthProfile> = {}): OAuthProfile => ({
     sub: `smoke-${stamp}-${++n}`,
     email: `oauth_probe_${stamp}_${n}@smoke.local`,
     emailVerified: true,
@@ -239,13 +272,47 @@ async function accountFlow(stamp: number, created: Set<number>): Promise<void> {
   check('เป็น soft delete (deleted_user_{id})', clashSub.username === `deleted_user_${clash.user.userId}`, clashSub.username);
   const reborn = track(await signInWithGoogle({ sub: `smoke-${stamp}-${n}`, email: `${local}@other.local`, emailVerified: true, name: null }));
   check('กลับมาด้วย Google เดิม = บัญชีใหม่ ไม่ใช่บัญชีที่ลบไป', reborn.user.userId !== clash.user.userId, reborn.user.userId);
+
+  // ---------------------------------------------------------------- Facebook (ADR-070)
+  const fbProfile = (over: Partial<OAuthProfile> = {}): OAuthProfile => ({
+    sub: `${stamp}${++n}`,
+    email: `fb_probe_${stamp}_${n}@smoke.local`,
+    emailVerified: true,
+    name: 'ทดสอบ Facebook',
+    ...over,
+  });
+
+  console.log('\n12) Facebook บัญชีใหม่');
+  const fb1 = fbProfile();
+  const fbSession = track(await signInWithFacebook(fb1));
+  const fbLinks = await prisma.oAuthAccount.findMany({ where: { userId: fbSession.user.userId } });
+  check('ผูก OAuthAccount FACEBOOK 1 แถว', fbLinks.length === 1 && fbLinks[0]?.provider === 'FACEBOOK' && fbLinks[0].providerUserId === fb1.sub, fbLinks);
+  check('Rating ครบ 4 แถว', (await prisma.rating.count({ where: { userId: fbSession.user.userId } })) === 4);
+  check('nickname = ชื่อจาก Facebook', fbSession.user.nickname === 'ทดสอบ Facebook', fbSession.user);
+
+  console.log('\n13) sub ชุดเดียวกันแต่คนละ provider = คนละบัญชี');
+  const sameSub = track(await signInWithGoogle(profile({ sub: fb1.sub })));
+  check('Google ที่ sub บังเอิญตรงกับ Facebook ไม่เข้าบัญชี Facebook', sameSub.user.userId !== fbSession.user.userId, sameSub.user.userId);
+
+  console.log('\n14) อีเมลเดียวกับบัญชี Google เดิม → ผูก Facebook เพิ่มเข้าบัญชีเดียวกัน');
+  const both2 = track(await signInWithFacebook(fbProfile({ email: u1.email })));
+  check('เข้าบัญชีเดิม', both2.user.userId === u1.userId, both2.user.userId);
+  const providers = (await prisma.oAuthAccount.findMany({ where: { userId: u1.userId } })).map((l) => l.provider).sort();
+  check('มีแถวผูกทั้ง FACEBOOK และ GOOGLE', providers.join(',') === 'FACEBOOK,GOOGLE', providers);
+
+  console.log('\n15) Facebook ไม่ส่งอีเมล (ADR-070 ข้อ 4)');
+  const noEmail = fbProfile({ email: null, emailVerified: false });
+  await expectFlowError('ยังไม่เคยผูก → email_missing', signInWithFacebook(noEmail), (e) => e instanceof OAuthFlowError && e.code === 'email_missing');
+  check('ไม่สร้างแถวผูก', (await prisma.oAuthAccount.count({ where: { provider: 'FACEBOOK', providerUserId: noEmail.sub } })) === 0);
+  const linkedNoEmail = track(await signInWithFacebook({ ...fb1, email: null, emailVerified: false }));
+  check('เคยผูกแล้ว → เข้าได้แม้ครั้งนี้ไม่มีอีเมล', linkedNoEmail.user.userId === fbSession.user.userId, linkedNoEmail.user.userId);
 }
 
 async function main(): Promise<void> {
   const stamp = Date.now();
   const created = new Set<number>();
   try {
-    await httpFlow();
+    for (const provider of HTTP_PROVIDERS) await httpFlow(provider);
     await accountFlow(stamp, created);
   } finally {
     // Rating ไม่ได้ cascade (ADR-022) — ลบก่อน · OAuthAccount / RefreshToken หายตามด้วย ON DELETE CASCADE
@@ -254,7 +321,7 @@ async function main(): Promise<void> {
     await prisma.user.deleteMany({ where: { userId: { in: ids } } });
     await prisma.$disconnect();
   }
-  process.exit(summary('(เฟส 2 — เข้าสู่ระบบด้วย Google)'));
+  process.exit(summary('(เฟส 2 — เข้าสู่ระบบด้วย Google/Facebook)'));
 }
 
 void main();

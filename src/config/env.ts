@@ -75,6 +75,23 @@ function googleConfig() {
   };
 }
 
+/**
+ * เข้าสู่ระบบด้วย Facebook (ADR-070) — กติกาเดียวกับ Google: ไม่ตั้งค่า = ปิดเฉพาะ Facebook
+ * `clientId` / `clientSecret` = App ID / App Secret · `callbackUrl` ต้องตรงกับ Valid OAuth Redirect URIs ของ Meta ทุกตัวอักษร
+ */
+function facebookConfig() {
+  const clientId = process.env.FACEBOOK_CLIENT_ID?.trim();
+  const clientSecret = process.env.FACEBOOK_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  return {
+    clientId,
+    clientSecret,
+    callbackUrl:
+      process.env.FACEBOOK_CALLBACK_URL?.trim() ||
+      `http://localhost:${port}/api/v1/auth/oauth/facebook/callback`,
+  };
+}
+
 export const env = {
   port,
   /**
@@ -120,6 +137,8 @@ export const env = {
   },
   /** `null` = ไม่ได้ตั้งค่า → ปิดการเข้าสู่ระบบด้วย Google */
   google: googleConfig(),
+  /** `null` = ไม่ได้ตั้งค่า → ปิดการเข้าสู่ระบบด้วย Facebook */
+  facebook: facebookConfig(),
   jwt: {
     accessSecret,
     refreshSecret,

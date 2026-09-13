@@ -21,7 +21,13 @@ import {
 import { generateOpaqueToken } from '../lib/tokens.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAuth, currentUser } from '../middleware/auth.js';
-import { authLimiter, loginLimiter, oauthLimiter, registerLimiter } from '../middleware/rate-limit.js';
+import {
+  authLimiter,
+  loginLimiter,
+  oauthLimiter,
+  registerLimiter,
+  resetPasswordLimiter,
+} from '../middleware/rate-limit.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   changePasswordSchema,
@@ -154,14 +160,14 @@ authRouter.delete(
   }),
 );
 
-/** ไม่มี `/forgot-password` คู่กันแล้ว — ผู้ใช้ขอลิงก์เองไม่ได้ ต้องให้ผู้ดูแลระบบออกให้ (ADR-068) */
+/** รีเซ็ตด้วย username + อีเมล ไม่มีลิงก์ ไม่มี `/forgot-password` (ADR-068 · ADR-069) */
 authRouter.post(
   '/reset-password',
-  authLimiter,
+  resetPasswordLimiter,
   validateBody(resetPasswordSchema),
   asyncHandler(async (req, res) => {
-    const { token, newPassword } = req.body as ResetPasswordInput;
-    await passwordReset.resetPassword(token, newPassword);
+    const { username, email, newPassword } = req.body as ResetPasswordInput;
+    await passwordReset.resetPassword(username, email, newPassword);
     // ทุกเซสชันถูกเพิกถอนแล้ว — ล้าง cookie ของเบราว์เซอร์นี้ด้วย ผู้ใช้ต้องเข้าสู่ระบบใหม่ (ADR-057 ข้อ 6)
     res.clearCookie(REFRESH_COOKIE_NAME, { path: REFRESH_COOKIE_PATH });
     res.json({ data: { passwordReset: true } });

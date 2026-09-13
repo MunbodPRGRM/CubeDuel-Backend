@@ -79,7 +79,7 @@ export const REFRESH_COOKIE_NAME = 'cubeduel_refresh';
 export const REFRESH_COOKIE_PATH = '/api/v1/auth';
 
 /**
- * cookie ที่พก `state` + PKCE verifier + `returnTo` ระหว่างไปหน้า Google แล้วกลับมา (ADR-058 ข้อ 2)
+ * cookie ที่พก `state` + PKCE verifier + `returnTo` ระหว่างไปหน้า Google/Facebook แล้วกลับมา (ADR-058 ข้อ 2) · ตัวเดียวกันทุก provider
  * อายุสั้น — ผู้ใช้เลือกบัญชีไม่นานขนาดนั้น เปิดค้างเกินนี้ต้องกดใหม่
  */
 export const OAUTH_COOKIE_NAME = 'cubeduel_oauth';

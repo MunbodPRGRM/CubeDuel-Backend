@@ -19,7 +19,7 @@ import type { LoginInput, RegisterInput } from '../schemas/auth.schema.js';
  *
  * กฎที่ห้ามพลาด:
  *   - สมัครสมาชิก 1 คน = สร้างแถว Rating ครบ 4 cube_type ในทรานแซกชันเดียวกัน
- *   - password_hash เป็น NULL ได้ (ผู้ใช้ Google) → ตอน login ต้องบอกว่าใช้ Google
+ *   - password_hash เป็น NULL ได้ (ผู้ใช้ Google/Facebook) → ตอน login ต้องบอกว่าใช้ Google/Facebook
  *   - ลบบัญชีใช้ soft delete (ADR-008) ห้ามลบแถวจริง
  *   - เปลี่ยน/รีเซ็ตรหัสผ่าน ระงับบัญชี ลบบัญชี → เพิกถอน refresh token ทั้งหมด (ADR-013)
  */
@@ -149,11 +149,12 @@ export async function login(input: LoginInput, deviceLabel?: string): Promise<Au
 
   if (!user) throw errors.unauthenticated(INVALID_CREDENTIALS);
 
-  // ผู้ใช้ Google ไม่มีรหัสผ่าน — ต้องบอกให้ตรง ไม่ใช่ "รหัสผ่านผิด" (ADR-012)
-  // รวมบัญชีที่เพิ่งผูก Google แล้วรหัสผ่านเดิมถูกล้าง (ADR-058 ข้อ 4) → บอกทางตั้งรหัสใหม่ด้วย
+  // ผู้ใช้ Google/Facebook ไม่มีรหัสผ่าน — ต้องบอกให้ตรง ไม่ใช่ "รหัสผ่านผิด" (ADR-012)
+  // รวมบัญชีที่เพิ่งผูก provider แล้วรหัสผ่านเดิมถูกล้าง (ADR-058 ข้อ 4) → บอกทางตั้งรหัสใหม่ด้วย
+  // ไม่ query ว่าผูก provider ไหน — ไม่บอกคนนอกว่าบัญชีนี้ใช้บริการอะไร (ADR-070 ข้อ 6)
   if (!user.passwordHash) {
     throw errors.unauthenticated(
-      'บัญชีนี้ยังไม่มีรหัสผ่าน กรุณาเข้าสู่ระบบด้วย Google หรือตั้งรหัสผ่านผ่าน "ลืมรหัสผ่าน?"',
+      'บัญชีนี้ยังไม่มีรหัสผ่าน กรุณาเข้าสู่ระบบด้วย Google หรือ Facebook หรือตั้งรหัสผ่านผ่าน "ลืมรหัสผ่าน?"',
     );
   }
 

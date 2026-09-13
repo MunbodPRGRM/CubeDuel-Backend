@@ -21,23 +21,15 @@ import {
 import { generateOpaqueToken } from '../lib/tokens.js';
 import { asyncHandler } from '../middleware/async-handler.js';
 import { requireAuth, currentUser } from '../middleware/auth.js';
-import {
-  authLimiter,
-  forgotPasswordLimiter,
-  loginLimiter,
-  oauthLimiter,
-  registerLimiter,
-} from '../middleware/rate-limit.js';
+import { authLimiter, loginLimiter, oauthLimiter, registerLimiter } from '../middleware/rate-limit.js';
 import { validateBody } from '../middleware/validate.js';
 import {
   changePasswordSchema,
   deleteAccountSchema,
-  forgotPasswordSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
   resetPasswordSchema,
-  type ForgotPasswordInput,
   type ResetPasswordInput,
 } from '../schemas/auth.schema.js';
 import * as authService from '../services/auth.service.js';
@@ -162,23 +154,7 @@ authRouter.delete(
   }),
 );
 
-/**
- * ขอลิงก์รีเซ็ตรหัสผ่าน — **ตอบก่อน แล้วค่อยหาบัญชีกับส่งอีเมล** (ADR-057 ข้อ 1)
- * ถ้ารอส่งเสร็จ อีเมลที่มีบัญชีจะตอบช้ากว่าเห็น ๆ = บอกคนนอกว่าอีเมลไหนสมัครไว้
- */
-authRouter.post(
-  '/forgot-password',
-  forgotPasswordLimiter,
-  validateBody(forgotPasswordSchema),
-  (req, res) => {
-    const { email } = req.body as ForgotPasswordInput;
-    res.json({ data: { sent: true } });
-    void passwordReset
-      .requestPasswordReset(email)
-      .catch((err: unknown) => console.error('[forgot-password]', err));
-  },
-);
-
+/** ไม่มี `/forgot-password` คู่กันแล้ว — ผู้ใช้ขอลิงก์เองไม่ได้ ต้องให้ผู้ดูแลระบบออกให้ (ADR-068) */
 authRouter.post(
   '/reset-password',
   authLimiter,

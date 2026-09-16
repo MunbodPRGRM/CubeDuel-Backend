@@ -45,6 +45,8 @@ export interface RoomPlayer {
   solveTimeMs: number | null;
   /** แจ้ง `solve:ready` แล้วหรือยัง (ช่วง LOADING) */
   loaded: boolean;
+  /** กด "พร้อม" ช่วง INSPECTION แล้วหรือยัง — คนละเรื่องกับ `isReady` ของล็อบบี้ (ADR-078) */
+  inspectionReady: boolean;
   /** move stream ของรอบนี้ — ใช้ replay ตอน `solve:solved` และคัดลง`MatchFlag` ถ้าเข้าเกณฑ์ soft */
   moves: RecordedMove[];
   /** อันดับในรอบนี้ ได้ค่าตอนแก้เสร็จหรือตอนจบแมตช์ */
@@ -54,13 +56,14 @@ export interface RoomPlayer {
 /** ค่าเริ่มต้นของความคืบหน้า — ใช้ทั้งตอนเข้าห้องและตอนเริ่มรอบใหม่ในห้องเดิม (ADR-035 ข้อ 3) */
 function freshProgress(): Pick<
   RoomPlayer,
-  'moveCount' | 'status' | 'solveTimeMs' | 'loaded' | 'moves' | 'rankNo'
+  'moveCount' | 'status' | 'solveTimeMs' | 'loaded' | 'inspectionReady' | 'moves' | 'rankNo'
 > {
   return {
     moveCount: 0,
     status: 'solving',
     solveTimeMs: null,
     loaded: false,
+    inspectionReady: false,
     moves: [],
     rankNo: null,
   };
@@ -251,6 +254,16 @@ export class Room {
     this.touch();
   }
 
+  /**
+   * ผู้เล่นทุกคนกด "พร้อม" ช่วง inspection ครบแล้ว = **ล็อกแล้ว** (ADR-078 ข้อ 4)
+   *
+   * ไม่มีธงล็อกแยก เพราะค่าพร้อมถูกล้างตอนหลุดเฉพาะ **ก่อน** ครบ และไม่ถูกล้างหลังครบ
+   * สองอย่างนี้จึงเป็นเรื่องเดียวกันเสมอ — client ใช้เงื่อนไขเดียวกันจาก snapshot ได้ด้วย
+   */
+  get inspectionLocked(): boolean {
+    return this.players.size > 0 && [...this.players.values()].every((p) => p.inspectionReady);
+  }
+
   /** ผู้เล่นที่ยังแก้อยู่ (ยังไม่ solved / dnf / surrendered) */
   stillSolving(): RoomPlayer[] {
     return [...this.players.values()].filter((player) => player.status === 'solving');
@@ -282,6 +295,7 @@ export class Room {
       eloRating: player.eloRating,
       isHost: this.isHost(player.userId),
       isReady: player.isReady,
+      inspectionReady: player.inspectionReady,
       connected: player.sockets.size > 0,
     };
   }

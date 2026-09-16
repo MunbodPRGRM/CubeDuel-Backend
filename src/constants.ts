@@ -7,6 +7,11 @@ export const ELO_INITIAL_RATING = 1000;
 
 export const COUNTDOWN_MS = 3_000;
 export const INSPECTION_MS = 15_000;
+/**
+ * ผู้เล่นทุกคนกด "พร้อม" ครบระหว่าง inspection → จบ inspection **อีกเท่านี้ข้างหน้า** ไม่ใช่ทันที
+ * ให้ทุกเครื่องเห็นเลขนับถอยหลังก่อนเริ่มเหมือนตอนครบ 15 วินาที — ไม่งั้นคนกดคนสุดท้ายรู้วินาทีเริ่มคนเดียว (ADR-078 ข้อ 2)
+ */
+export const INSPECTION_READY_BUFFER_MS = 3_000;
 export const FINAL_COUNTDOWN_MS = 10_000;
 
 /** รอ `solve:ready` ครบทุกคนได้นานสุดเท่านี้ แล้วไปต่อเอง (game-rules.md ข้อ 1) */

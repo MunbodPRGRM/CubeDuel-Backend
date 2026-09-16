@@ -14,6 +14,8 @@ const LIMIT_PER_SECOND: Record<string, number> = {
   'solve:camera': 30,
   // เข้า/ออกคิวรัว ๆ ทำให้ต้องอ่าน Rating จาก DB ทุกครั้ง — ปุ่มจริงกดได้ไม่เกินนี้อยู่แล้ว
   'queue:join': 3,
+  // กดสลับพร้อม/ยกเลิกรัว ๆ = snapshot ไปทั้งห้องทุกครั้ง · นิ้วคนกดจริงไม่ถึงนี้ (ADR-078 ข้อ 4)
+  'solve:inspection_ready': 5,
 };
 const DEFAULT_LIMIT_PER_SECOND = 20;
 

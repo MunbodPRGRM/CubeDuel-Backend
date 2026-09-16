@@ -13,6 +13,7 @@ import {
   roomReadySchema,
   roomRejoinSchema,
   solveCameraSchema,
+  solveInspectionReadySchema,
   solveMoveSchema,
   solveSolvedSchema,
 } from '../schemas/socket.schema.js';
@@ -20,6 +21,7 @@ import { on, type TypedServer, type TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import {
   handleDevFinish,
+  handleInspectionReady,
   handleMove,
   handleSolved,
   handleSurrender,
@@ -166,6 +168,11 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     markLoaded(io, requireRoom(socket), socket.data.userId);
     return null;
   });
+
+  // ปุ่ม "พร้อม" ช่วง inspection — คนละตัวกับ `solve:ready` ด้านบน (ADR-078)
+  on(socket, 'solve:inspection_ready', solveInspectionReadySchema, (socket, payload) =>
+    handleInspectionReady(io, requireRoom(socket), socket.data.userId, payload),
+  );
 
   // ไม่มี ack — client ส่งแล้วไปต่อเลย ผิดเมื่อไรได้ event `error` กลับไป
   on(socket, 'solve:move', solveMoveSchema, (socket, payload) => {

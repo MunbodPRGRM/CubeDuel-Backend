@@ -67,6 +67,16 @@ async function main(): Promise<void> {
   check('สกินเปลี่ยน', skinOnly.data?.cubeSkin === 'pastel', skinOnly.data?.cubeSkin);
   check('ชื่อเล่นยังอยู่ครบ', skinOnly.data?.nickname === 'สมชาย', skinOnly.data?.nickname);
 
+  // สกินชุดที่เพิ่มในเฟส 13 ก้อนที่ 11 (ADR-080) — ตัวแรกและตัวสุดท้ายของรายการ
+  for (const skin of ['retro', 'colorblind']) {
+    const added = await patchProfile(token, { cubeSkin: skin });
+    check(
+      `สกินใหม่ ${skin} บันทึกได้ (ADR-080)`,
+      added.status === 200 && added.data?.cubeSkin === skin,
+      added,
+    );
+  }
+
   console.log('\n4) ค่าที่ไม่ผ่านกติกา');
   const badSkin = await patchProfile(token, { cubeSkin: 'rainbow' });
   check(

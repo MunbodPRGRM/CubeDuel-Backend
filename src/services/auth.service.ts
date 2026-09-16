@@ -11,6 +11,7 @@ import {
 } from '../lib/jwt.js';
 import { env } from '../config/env.js';
 import { ALL_CUBE_TYPES, ELO_INITIAL_RATING } from '../constants.js';
+import { revokeUserSockets } from '../sockets/presence.js';
 import { toSelfUser, USER_ROLE_TO_API, type AuthSessionDto } from '../types/api.js';
 import type { LoginInput, RegisterInput } from '../schemas/auth.schema.js';
 
@@ -29,8 +30,19 @@ const INVALID_CREDENTIALS = 'ชื่อผู้ใช้หรือรหั
 
 // ---------------------------------------------------------------- session
 
-/** ออก access + refresh token ให้ผู้ใช้ที่ผ่านการยืนยันตัวตนแล้ว (รหัสผ่าน หรือ Google — `oauth.service.ts`) */
+/**
+ * ออก access + refresh token ให้ผู้ใช้ที่ผ่านการยืนยันตัวตนแล้ว (รหัสผ่าน หรือ Google/Facebook — `oauth.service.ts`)
+ *
+ * 🔴 **หนึ่งบัญชีใช้ได้ทีละเครื่อง (ADR-076)** — ที่นี่คือจุดเดียวที่ทุกทางของการ "เข้าสู่ระบบใหม่"
+ * วิ่งผ่าน (`login` · `register` · OAuth) จึงเพิกถอนเซสชันเดิมทั้งหมดแล้วเตะ socket เก่าตรงนี้ที่เดียว
+ * · **`refreshSession()` ไม่เรียกฟังก์ชันนี้และห้ามเรียก** — ต่ออายุเป็นเรื่องของเซสชันเดิม
+ *   ถ้าเผลอใส่ไว้ทางนั้น ทุกคนจะเตะตัวเองทุก 15 นาที
+ */
 export async function issueSession(user: User, deviceLabel?: string): Promise<AuthSessionDto> {
+  await revokeAllRefreshTokens(user.userId);
+  // ไม่ยุ่งกับห้องของเครื่องเก่าเอง — ปล่อยให้ตัวจัดการ disconnect เดิมทำงาน (game-rules.md ข้อ 6)
+  revokeUserSockets(user.userId);
+
   const accessToken = signAccessToken({
     sub: user.userId,
     username: user.username,
@@ -184,10 +196,22 @@ export async function refreshSession(
   }
 
   if (row.revokedAt) {
-    await revokeAllRefreshTokens(row.userId);
-    throw errors.unauthenticated(
-      'ตรวจพบการใช้ refresh token ซ้ำ ระบบเพิกถอนทุกเซสชันแล้ว กรุณาเข้าสู่ระบบใหม่',
-    );
+    /**
+     * แยกสองกรณีที่ token "ถูกเพิกถอน" ให้ออกจากกัน (ADR-076 ข้อ 7):
+     *
+     * · `replacedBy !== null` = ใบนี้ถูก **rotate** ไปแล้วแต่ยังมีคนเอามาใช้ → ถือว่าถูกขโมย
+     *   เพิกถอนทุกเซสชันตามเดิม (ADR-013)
+     * · `replacedBy === null` = ใบนี้ถูกปิดตั้งใจ (ออกจากระบบ · **ถูกแทนที่เพราะเข้าสู่ระบบใหม่** · ถูกระงับ)
+     *   → ตอบ 401 เฉย ๆ **ห้ามเพิกถอนทุกเซสชัน** ไม่งั้นเครื่องเก่าที่ยังยิง refresh อัตโนมัติ
+     *   จะลากเครื่องใหม่ที่เพิ่งล็อกอินหลุดตามไปด้วย — กฎ "เข้าใหม่ชนะ" จะพังทันที
+     */
+    if (row.replacedBy !== null) {
+      await revokeAllRefreshTokens(row.userId);
+      throw errors.unauthenticated(
+        'ตรวจพบการใช้ refresh token ซ้ำ ระบบเพิกถอนทุกเซสชันแล้ว กรุณาเข้าสู่ระบบใหม่',
+      );
+    }
+    throw errors.unauthenticated('เซสชันนี้ถูกปิดไปแล้ว กรุณาเข้าสู่ระบบใหม่');
   }
 
   if (row.expiresAt <= new Date()) {

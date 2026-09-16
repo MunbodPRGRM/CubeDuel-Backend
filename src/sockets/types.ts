@@ -314,6 +314,12 @@ export interface ServerToClientEvents {
   'player:disconnected': (payload: { userId: number; graceEndsAtTs: number }) => void;
   'player:reconnected': (payload: { userId: number }) => void;
 
+  /**
+   * บัญชีนี้ถูกเข้าสู่ระบบจากที่อื่น — สายนี้กำลังจะถูกตัด (ADR-076 · socket-events.md ข้อ 2)
+   * client ต้องล้างเซสชันแล้วพาไปหน้าเข้าสู่ระบบ ไม่ต้องยิง `/auth/logout`
+   */
+  'session:revoked': (payload: { reason: 'signed_in_elsewhere' }) => void;
+
   error: (payload: AckError) => void;
 }
 

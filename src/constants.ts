@@ -12,8 +12,11 @@ export const FINAL_COUNTDOWN_MS = 10_000;
 /** รอ `solve:ready` ครบทุกคนได้นานสุดเท่านี้ แล้วไปต่อเอง (game-rules.md ข้อ 1) */
 export const LOADING_TIMEOUT_MS = 15_000;
 
-/** เจอคู่แล้วหน่วงให้ดูข้อมูลคู่แข่งเท่านี้ก่อนเข้า LOADING เอง (game-rules.md ข้อ 1) */
-export const MATCHED_DELAY_MS = 2_000;
+/**
+ * เจอกลุ่มแล้วมีเวลากด "เล่นเลย / ยกเลิก" เท่านี้ — หมดเวลา = ปฏิเสธ (game-rules.md ข้อ 8 · ADR-077)
+ * ส่งให้ client เป็น **เวลาสิ้นสุด** (`expiresAtTs`) ไม่ใช่จำนวนวินาที (socket-events.md ข้อ 1)
+ */
+export const READY_CHECK_MS = 12_000;
 
 /** ความถี่ที่กวาดคิวจับคู่ (ADR-039 ข้อ 7) */
 export const QUEUE_TICK_MS = 1_000;

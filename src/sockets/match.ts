@@ -701,6 +701,7 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
             cubeType: room.cubeType,
             scramble: room.scramble,
             roomCode: room.roomCode,
+            spectatorCount: room.peakSpectatorCount,
             startedAtTs: room.serverStartTs ?? finishedAtTs,
             finishedAtTs,
             winnerId,

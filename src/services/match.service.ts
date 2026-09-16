@@ -75,6 +75,8 @@ export interface MultiplayerMatchOutcome {
   scramble: string;
   /** มีเฉพาะโหมด custom (ห้องที่เข้าด้วยรหัส) — โหมด auto เป็น null เสมอ */
   roomCode: string | null;
+  /** ผู้ชมสูงสุดระหว่างแมตช์ — มีได้เฉพาะโหมด custom (ADR-079) */
+  spectatorCount: number;
   startedAtTs: number;
   finishedAtTs: number;
   /** null = ไม่มีใครได้อันดับ 1 คนเดียว (เวลาเท่ากัน หรือ DNF ทั้งห้อง) */
@@ -308,6 +310,8 @@ export async function saveMultiplayerMatch(outcome: MultiplayerMatchOutcome): Pr
         // คอลัมน์นี้มีความหมายเฉพาะโหมด custom — ห้องจับคู่อัตโนมัติไม่มีรหัสห้อง
         roomCode: outcome.roomMode === RoomMode.CUSTOM ? outcome.roomCode : null,
         playerCount: players.length,
+        // ห้องจากคิวไม่มีรหัสให้ผู้ชมเข้า — บังคับ 0 ไว้เหมือน roomCode ข้างบน
+        spectatorCount: outcome.roomMode === RoomMode.CUSTOM ? outcome.spectatorCount : 0,
         startedAt: new Date(outcome.startedAtTs),
         finishedAt: new Date(outcome.finishedAtTs),
       },
@@ -415,6 +419,8 @@ export interface MultiplayerMatchDetail {
   playerCount: number;
   /** null = ไม่มีใครได้อันดับ 1 คนเดียว (เสมอ หรือ DNF ทั้งห้อง) */
   winnerId: number | null;
+  /** ผู้ชมสูงสุดระหว่างแมตช์ — โหมด auto เป็น 0 เสมอ (ADR-079) */
+  spectatorCount: number;
   startedAt: string;
   finishedAt: string | null;
   ratingApplied: boolean;
@@ -558,6 +564,7 @@ export async function getMultiplayerMatchDetail(
     roomCode: match.roomCode,
     playerCount: match.playerCount,
     winnerId: first.length === 1 ? first[0]!.userId : null,
+    spectatorCount: match.spectatorCount,
     startedAt: match.startedAt.toISOString(),
     finishedAt: match.finishedAt?.toISOString() ?? null,
     ratingApplied: match.roomMode === RoomMode.AUTO,

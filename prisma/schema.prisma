@@ -261,6 +261,8 @@ model MultiplayerMatch {
   playerCount        Int       @map("player_count")
   startedAt          DateTime  @default(now()) @map("started_at")
   finishedAt         DateTime? @map("finished_at")
+  /// จำนวนผู้ชมสูงสุดระหว่างแมตช์ — โหมด AUTO เป็น 0 เสมอ (ADR-079)
+  spectatorCount     Int       @default(0) @map("spectator_count")
 
   participants MultiplayerMatchParticipant[]
   reports      Report[]

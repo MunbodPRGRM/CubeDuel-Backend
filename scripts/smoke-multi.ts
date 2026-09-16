@@ -19,6 +19,7 @@ import { CubeType, PrismaClient, RoomMode, SolveResult } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
 import {
   API,
+  autoAcceptMatches,
   check,
   connect,
   emit,
@@ -165,7 +166,11 @@ async function main(): Promise<void> {
   const players: Player[] = [];
   for (const name of names) {
     const auth = await login(name);
-    players.push({ name, ...auth, socket: await connect(auth.token) });
+    const socket = await connect(auth.token);
+    // เทสชุดนี้ตรวจสิ่งที่เกิดหลังยืนยันครบ — กดยอมรับให้อัตโนมัติ (ADR-077)
+    // การปฏิเสธ/หมดเวลามีเทสของตัวเองอยู่ใน `smoke:queue`
+    autoAcceptMatches(socket);
+    players.push({ name, ...auth, socket });
   }
   const [alice, bob, chai, dao, eve] = players as [Player, Player, Player, Player, Player];
   const quartet = [alice, bob, chai, dao];

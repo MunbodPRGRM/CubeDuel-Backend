@@ -36,7 +36,7 @@ export function createSocketServer(httpServer: HttpServer): TypedServer {
 
     socket.on('disconnect', () => {
       // อยู่ระหว่างรอคิว → ออกจากคิวทันที ไม่มี grace (game-rules.md ข้อ 6)
-      removeSocketFromQueue(socket.id);
+      removeSocketFromQueue(io, socket.id);
       // socket ตัวสุดท้ายของผู้เล่นหลุด → เริ่มนับ grace 30 วินาที (game-rules.md ข้อ 6)
       const dropped = leaveRoom(io, socket, 'disconnected');
       if (dropped) beginDisconnectGrace(io, dropped.room, dropped.userId);

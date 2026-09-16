@@ -7,12 +7,14 @@
  * ครอบ: จับคู่จาก `queue:join` จริง · ห้องที่ได้เป็น competitive ไม่มีรหัสห้อง ·
  *       เริ่มเองหลัง MATCHED โดยไม่มีใครกด `room:start` · เล่นจนจบแล้ว Elo ขยับ ·
  *       `queue:status` · เข้าคิวซ้ำ · ออกจากคิว · คนละประเภทรูบิคไม่เจอกัน ·
- *       ช่วง Elo ขยายตามเวลารอ · หลุดระหว่างรอคิว · เข้าคิวตอนยังอยู่ในห้องเดิม
+ *       ช่วง Elo ขยายตามเวลารอ · หลุดระหว่างรอคิว · เข้าคิวตอนยังอยู่ในห้องเดิม ·
+ *       **หน้ายืนยันก่อนเข้าห้อง (`READY_CHECK`) ครบทุกทางออก** (ADR-077)
  */
 import { CubeType, PrismaClient, RoomType } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
 import {
   API,
+  autoAcceptMatches,
   check,
   connect,
   emit,
@@ -73,7 +75,33 @@ function sleep(ms: number): Promise<void> {
 
 async function openPlayer(username: string): Promise<Player> {
   const auth = await login(username);
-  return { ...auth, username, socket: await connect(auth.token) };
+  const socket = await connect(auth.token);
+  // ตั้งแต่ ADR-077 ห้องไม่ถูกสร้างจนกว่าทุกคนจะกดยืนยัน — รอบที่ทดสอบเรื่องอื่นกดให้เลย
+  autoAcceptMatches(socket);
+  return { ...auth, username, socket };
+}
+
+/** รอบที่ 5 คุมการกดยืนยันเอง จึงต้องปิดตัวกดอัตโนมัติก่อน */
+function setAutoAccept(player: Player, on: boolean): void {
+  player.socket.off('queue:match_found');
+  if (on) autoAcceptMatches(player.socket);
+}
+
+/** รูปของ `queue:timeout` (socket-events.md ข้อ 4) */
+interface QueueTimeout {
+  waitedMs: number;
+  reason: 'no_match' | 'ready_check';
+}
+
+/** รูปของ `queue:match_found` (socket-events.md ข้อ 4) */
+interface MatchFound {
+  kind: string;
+  cubeType: string;
+  rivals: { userId: number; username: string; nickname: string | null; eloRating: number }[];
+  groupSize: number;
+  acceptedCount: number;
+  youAccepted: boolean;
+  expiresAtTs: number;
 }
 
 /**
@@ -358,17 +386,22 @@ async function main(): Promise<void> {
 
   // ---------------------------------------------------------------- 4. ยุบห้องก่อนเริ่ม
   console.log('');
-  console.log('รอบที่ 4 — คู่แข่งหลุดก่อนเริ่มจับเวลา → คนที่เหลือถูกส่งกลับเข้าคิวให้เอง');
+  console.log(
+    'รอบที่ 4 — คู่แข่งหลุดก่อนเริ่มจับเวลา → คนที่เหลือถูกส่งกลับเข้าคิวให้เอง (รอ grace 30 วิ)',
+  );
   await Promise.all([setElo(alice.userId, BASELINE_ELO), setElo(bob.userId, BASELINE_ELO)]);
 
-  const aborted = waitFor<{ reason: string }>(alice.socket, 'room:aborted', 15_000);
-  const backInQueue = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 15_000);
+  // ตั้งแต่ ADR-077 ตัดหน่วง 2 วินาทีหลัง MATCHED ทิ้ง ห้องจึงเข้า LOADING ทันที —
+  // คู่แข่งที่หลุดตอนนี้เข้าเส้นทาง grace 30 วินาทีของ `game-rules.md` ข้อ 6 แทน
+  // (ยังไม่เริ่มจับเวลา → ยุบห้อง → คนที่เหลือกลับเข้าคิว) จึงต้องรอนานกว่า grace
+  const aborted = waitFor<{ reason: string }>(alice.socket, 'room:aborted', 45_000);
+  const backInQueue = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 45_000);
   const matchedAgain = waitFor<Matched>(alice.socket, 'queue:matched', 15_000);
   await joinQueue(alice);
   await joinQueue(bob);
   if ((await matchedAgain) === null) throw new Error('รอบที่ 4 จับคู่ไม่ติด');
 
-  // ปิด socket ของคู่แข่งทิ้งระหว่าง MATCHED — ตอน server จะเริ่มให้จะพบว่าเหลือคนเดียว
+  // ปิด socket ของคู่แข่งทิ้งก่อนเริ่มจับเวลา — ครบ grace แล้ว server จะพบว่าเหลือคนเดียว
   bob.socket.close();
 
   check('ห้องถูกยุบและแจ้ง room:aborted', (await aborted)?.reason === 'player_left', await aborted);
@@ -382,8 +415,233 @@ async function main(): Promise<void> {
     result: stillQueued,
   });
 
+  // ---------------------------------------------------------------- 5. หน้ายืนยันก่อนเข้าห้อง
+  console.log('');
+  console.log('รอบที่ 5 — READY_CHECK: เห็นคู่แข่ง · ปฏิเสธ · หมดเวลา · หลุดระหว่างรอยืนยัน');
+
+  // bob ถูกปิด socket ไปตั้งแต่รอบที่ 4 — เปิดใหม่แล้วคุมการกดยืนยันเองทั้งคู่
+  const dave = await openPlayer('malee');
+  setAutoAccept(alice, false);
+  setAutoAccept(dave, false);
+  await Promise.all([setElo(alice.userId, BASELINE_ELO), setElo(dave.userId, BASELINE_ELO)]);
+
+  // ---- 5.1 เจอกลุ่มแล้วได้ queue:match_found ไม่ใช่ queue:matched
+  const aliceFound = waitFor<MatchFound>(alice.socket, 'queue:match_found', 15_000);
+  const daveFound = waitFor<MatchFound>(dave.socket, 'queue:match_found', 15_000);
+  const noRoomYet = waitFor<Matched>(alice.socket, 'queue:matched', 6_000);
+  const readyJoin = await joinQueue(alice);
+  await joinQueue(dave);
+  // ถ้ารอบก่อนหน้าทิ้งห้องค้างไว้ การเข้าคิวจะไม่ผ่าน แล้วรอบนี้จะล้มเป็นทอด ๆ โดยไม่รู้สาเหตุ
+  check('เข้าคิวเพื่อทดสอบหน้ายืนยันได้ (ไม่มีห้องค้างจากรอบก่อน)', readyJoin.ok, readyJoin);
+
+  const [foundA, foundD] = await Promise.all([aliceFound, daveFound]);
+  check('ทั้งสองฝั่งได้ queue:match_found', foundA !== null && foundD !== null);
+  check(
+    'เห็นคู่ต่อสู้ครบ ชื่อ + Elo ของประเภทที่จะแข่ง และไม่มีตัวเองอยู่ในรายการ',
+    foundA?.rivals.length === 1 &&
+      foundA.rivals[0]?.userId === dave.userId &&
+      foundA.rivals[0]?.username === dave.username &&
+      foundA.rivals[0]?.eloRating === BASELINE_ELO,
+    foundA?.rivals,
+  );
+  check(
+    'payload บอกขนาดกลุ่ม · จำนวนที่ยืนยันแล้ว · และยังไม่มีใครกด',
+    foundA?.groupSize === 2 && foundA.acceptedCount === 0 && foundA.youAccepted === false,
+    foundA,
+  );
+  check(
+    'ส่ง expiresAtTs เป็นเวลาสิ้นสุด ไม่ใช่จำนวนวินาที และอยู่ในราว 12 วิข้างหน้า',
+    typeof foundA?.expiresAtTs === 'number' &&
+      foundA.expiresAtTs - Date.now() > 8_000 &&
+      foundA.expiresAtTs - Date.now() <= 13_000,
+    { expiresAtTs: foundA?.expiresAtTs, inMs: (foundA?.expiresAtTs ?? 0) - Date.now() },
+  );
+  check('ยังไม่ได้ยืนยัน = ยังไม่มีห้อง (ไม่มี queue:matched)', (await noRoomYet) === null);
+
+  // ---- 5.2 ยังอยู่ในคิวระหว่างรอยืนยัน — เข้าคิวซ้ำไม่ได้
+  const joinWhilePending = await joinQueue(alice);
+  check(
+    'queue:join ระหว่างรอยืนยัน → E_ALREADY_IN_QUEUE (ยังนับว่าอยู่ในคิว)',
+    !joinWhilePending.ok && joinWhilePending.error.code === 'E_ALREADY_IN_QUEUE',
+    joinWhilePending,
+  );
+
+  // ---- 5.3 ฝ่ายหนึ่งยอมรับ อีกฝ่ายเห็นตัวเลขขยับ แล้วกดปฏิเสธ
+  const daveSeesAccept = waitFor<MatchFound>(dave.socket, 'queue:match_found', 5_000);
+  const aliceBackInQueue = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 8_000);
+  const accepted = await emit<{ accepted: number; groupSize: number }>(
+    alice.socket,
+    'queue:accept',
+    {},
+  );
+  check(
+    'queue:accept ตอบจำนวนที่ยืนยันแล้วกับขนาดกลุ่ม',
+    accepted.ok && accepted.data.accepted === 1 && accepted.data.groupSize === 2,
+    accepted,
+  );
+  const afterAccept = await daveSeesAccept;
+  check(
+    'อีกฝ่ายได้ queue:match_found ใบใหม่ที่ acceptedCount ขยับ (ใช้โชว์ 2/4 ในห้องหลายคน)',
+    afterAccept?.acceptedCount === 1 && afterAccept.youAccepted === false,
+    afterAccept,
+  );
+
+  const acceptAgain = await emit<{ accepted: number }>(alice.socket, 'queue:accept', {});
+  check(
+    'กด queue:accept ซ้ำไม่ใช่ error ตอบจำนวนเดิมกลับมา',
+    acceptAgain.ok && acceptAgain.data.accepted === 1,
+    acceptAgain,
+  );
+
+  const declined = await emit<{ left: boolean }>(dave.socket, 'queue:decline', {});
+  check(
+    'queue:decline ตอบ left = true (ออกจากคิวจริง)',
+    declined.ok && declined.data.left,
+    declined,
+  );
+  check(
+    'คนที่กดยอมรับได้ queue:status = server พากลับเข้าคิวให้เองโดยไม่ต้องกดอะไร',
+    (await aliceBackInQueue) !== null,
+    'ไม่ได้รับ queue:status หลังอีกฝ่ายปฏิเสธ',
+  );
+
+  const aliceStill = await emit<{ left: boolean }>(alice.socket, 'queue:leave', {});
+  const daveGone = await emit<{ left: boolean }>(dave.socket, 'queue:leave', {});
+  check('คนที่ยอมรับยังอยู่ในคิว', aliceStill.ok && aliceStill.data.left === true, aliceStill);
+  check('คนที่ปฏิเสธออกจากคิวไปแล้ว', daveGone.ok && daveGone.data.left === false, daveGone);
+
+  const acceptOutside = await emit(alice.socket, 'queue:accept', {});
+  check(
+    'queue:accept ตอนไม่ได้อยู่ใน READY_CHECK → E_INVALID_STATE',
+    !acceptOutside.ok && acceptOutside.error.code === 'E_INVALID_STATE',
+    acceptOutside,
+  );
+
+  // ---- 5.4 ปล่อยหมดเวลา = ปฏิเสธทั้งคู่
+  const bothFound = Promise.all([
+    waitFor<MatchFound>(alice.socket, 'queue:match_found', 15_000),
+    waitFor<MatchFound>(dave.socket, 'queue:match_found', 15_000),
+  ]);
+  await joinQueue(alice);
+  await joinQueue(dave);
+  const pair = await bothFound;
+  check(
+    'จับกันใหม่ได้ทันที — คู่ที่ปฏิเสธไม่นับว่าเคยเจอกัน',
+    pair.every((p) => p !== null),
+  );
+
+  // 🔴 คนที่ปล่อยหมดเวลาไม่มี ack ให้ยึดเหมือนตอนกดยกเลิกเอง — ถ้า server ไม่ยิงอะไรกลับมา
+  // หน้ายืนยันบนจอจะค้างตลอดไป (บั๊กที่เจ้าของเจอตอนลองด้วยมือ)
+  const [timeoutA, timeoutD] = await Promise.all([
+    waitFor<QueueTimeout>(alice.socket, 'queue:timeout', 16_000),
+    waitFor<QueueTimeout>(dave.socket, 'queue:timeout', 16_000),
+  ]);
+  check(
+    'ปล่อยหมดเวลา → ทั้งคู่ได้ queue:timeout กลับมา (จอต้องไม่ค้างที่หน้ายืนยัน)',
+    timeoutA !== null && timeoutD !== null,
+    { alice: timeoutA, dave: timeoutD },
+  );
+  check(
+    'queue:timeout บอก reason = ready_check แยกจากการรอครบ 180 วิ',
+    timeoutA?.reason === 'ready_check' && timeoutD?.reason === 'ready_check',
+    { alice: timeoutA?.reason, dave: timeoutD?.reason },
+  );
+
+  const aliceTimedOut = await emit<{ left: boolean }>(alice.socket, 'queue:leave', {});
+  const daveTimedOut = await emit<{ left: boolean }>(dave.socket, 'queue:leave', {});
+  check(
+    'ไม่มีใครกดยืนยันจนหมดเวลา → ทั้งคู่หลุดจากคิว (หมดเวลา = ปฏิเสธ)',
+    aliceTimedOut.ok &&
+      aliceTimedOut.data.left === false &&
+      daveTimedOut.ok &&
+      daveTimedOut.data.left === false,
+    { alice: aliceTimedOut, dave: daveTimedOut },
+  );
+
+  // ---- 5.5 คนที่ยอมรับแล้วปล่อยอีกฝ่ายหมดเวลา — ต้องอยู่ในคิวต่อ
+  const foundAgain = Promise.all([
+    waitFor<MatchFound>(alice.socket, 'queue:match_found', 15_000),
+    waitFor<MatchFound>(dave.socket, 'queue:match_found', 15_000),
+  ]);
+  await joinQueue(alice);
+  await joinQueue(dave);
+  if ((await foundAgain).some((p) => p === null)) throw new Error('รอบที่ 5.5 จับคู่ไม่ติด');
+
+  const aliceRequeued = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 20_000);
+  const daveToldAlone = waitFor<QueueTimeout>(dave.socket, 'queue:timeout', 20_000);
+  // คนที่กดยอมรับต้องไม่โดนเตะออกจากคิวไปด้วย จึงต้องไม่ได้ queue:timeout
+  const aliceNotTimedOut = waitFor<QueueTimeout>(alice.socket, 'queue:timeout', 16_000);
+  await emit(alice.socket, 'queue:accept', {});
+  check(
+    'คนที่ยอมรับแล้วอีกฝ่ายปล่อยหมดเวลา → ได้ queue:status กลับมา',
+    (await aliceRequeued) !== null,
+    'ไม่ได้รับ queue:status หลังอีกฝ่ายหมดเวลา',
+  );
+  check(
+    'ฝ่ายที่ไม่กดอะไรเลยได้ queue:timeout รู้ตัวว่าหลุดเพราะไม่ได้ยืนยัน',
+    (await daveToldAlone)?.reason === 'ready_check',
+    await daveToldAlone,
+  );
+  check(
+    'ฝ่ายที่กดยอมรับไม่ได้ queue:timeout (ยังอยู่ในคิวต่อ)',
+    (await aliceNotTimedOut) === null,
+    await aliceNotTimedOut,
+  );
+  const aliceKept = await emit<{ left: boolean }>(alice.socket, 'queue:leave', {});
+  const daveDropped = await emit<{ left: boolean }>(dave.socket, 'queue:leave', {});
+  check('คนที่ยอมรับยังอยู่ในคิว', aliceKept.ok && aliceKept.data.left === true, aliceKept);
+  check(
+    'คนที่ไม่กดอะไรเลยหลุดจากคิว',
+    daveDropped.ok && daveDropped.data.left === false,
+    daveDropped,
+  );
+
+  // ---- 5.6 คนอื่นกดยกเลิกก่อนที่เราจะทันได้กด — เราต้องไม่ถูกถอดออกจากคิวไปด้วย
+  const bothSee = Promise.all([
+    waitFor<MatchFound>(alice.socket, 'queue:match_found', 15_000),
+    waitFor<MatchFound>(dave.socket, 'queue:match_found', 15_000),
+  ]);
+  await joinQueue(alice);
+  await joinQueue(dave);
+  if ((await bothSee).some((p) => p === null)) throw new Error('รอบที่ 5.6 จับคู่ไม่ติด');
+
+  const aliceUntouched = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 8_000);
+  // dave กดยกเลิกทันที ตอนที่ alice ยังไม่ได้กดอะไรและยังไม่ได้ใช้ 12 วินาทีของตัวเองเลย
+  await emit(dave.socket, 'queue:decline', {});
+  check(
+    'อีกฝ่ายกดยกเลิกก่อนเราทันได้กด → ได้ queue:status กลับมา',
+    (await aliceUntouched) !== null,
+    'ไม่ได้รับ queue:status หลังอีกฝ่ายกดยกเลิก',
+  );
+  const notPunished = await emit<{ left: boolean }>(alice.socket, 'queue:leave', {});
+  check(
+    'คนที่ยังไม่ทันได้กดยังอยู่ในคิว — "หมดเวลา = ปฏิเสธ" ใช้กับการหมดเวลาจริงเท่านั้น',
+    notPunished.ok && notPunished.data.left === true,
+    notPunished,
+  );
+  await emit(dave.socket, 'queue:leave', {});
+
+  // ---- 5.7 หลุดระหว่างรอยืนยัน = ปฏิเสธ อีกฝ่ายต้องไม่ค้าง
+  const ghostFound = waitFor<MatchFound>(dave.socket, 'queue:match_found', 15_000);
+  const aliceFoundAgain = waitFor<MatchFound>(alice.socket, 'queue:match_found', 15_000);
+  await joinQueue(alice);
+  await joinQueue(dave);
+  if ((await ghostFound) === null || (await aliceFoundAgain) === null) {
+    throw new Error('รอบที่ 5.7 จับคู่ไม่ติด');
+  }
+
+  const aliceAfterDrop = waitFor<{ waitedMs: number }>(alice.socket, 'queue:status', 8_000);
+  await emit(alice.socket, 'queue:accept', {});
+  dave.socket.close();
+  check(
+    'อีกฝ่ายปิดแท็บระหว่างรอยืนยัน → กลับเข้าคิวทันที ไม่ต้องรอจนหมด 12 วินาที',
+    (await aliceAfterDrop) !== null,
+    'ไม่ได้รับ queue:status หลังคู่แข่งหลุด',
+  );
+  await emit(alice.socket, 'queue:leave', {});
+
   // ---------------------------------------------------------------- เก็บกวาด
-  for (const player of [alice, bob, carol]) player.socket.close();
+  for (const player of [alice, bob, carol, dave]) player.socket.close();
   const code = summary();
   await prisma.$disconnect();
   process.exit(code);

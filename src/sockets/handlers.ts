@@ -27,7 +27,7 @@ import {
   relayCamera,
   startMatch,
 } from './match.js';
-import { joinQueue, leaveQueue } from './queue.js';
+import { acceptMatch, declineMatch, joinQueue, leaveQueue } from './queue.js';
 import { createRoom, getRoom, getRoomByCode, membershipOf } from './room-registry.js';
 import type { Room } from './room.js';
 import {
@@ -70,15 +70,21 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
   on(socket, 'queue:join', queueJoinSchema, (socket, payload) => joinQueue(io, socket, payload));
 
   on(socket, 'queue:leave', emptyPayloadSchema, (socket) => ({
-    left: leaveQueue(socket.data.userId),
+    left: leaveQueue(io, socket.data.userId),
   }));
+
+  /** เจอกลุ่มแล้วต้องกดยืนยันก่อน ห้องถึงจะถูกสร้าง (ADR-077) */
+  on(socket, 'queue:accept', emptyPayloadSchema, (socket) => acceptMatch(io, socket));
+
+  /** ปฏิเสธ = ออกจากคิว · ไม่มีคูลดาวน์ และไม่นับว่าเคยเจอคู่นั้น (ADR-077 ข้อ 2) */
+  on(socket, 'queue:decline', emptyPayloadSchema, (socket) => declineMatch(io, socket));
 
   // ---------------------------------------------------------------- ห้อง
 
   on(socket, 'room:create', roomCreateSchema, async (socket, payload) => {
     // อยู่ในห้องพร้อมกับอยู่ในคิวไม่ได้ (socket-events.md ข้อ 4) — ทางกลับของ `joinQueue()`
     // ที่พาออกจากห้องให้เอง · ถ้าไม่ล้างตรงนี้ คิวจะดึงคนที่อยู่ในห้องอื่นออกไปกลางคัน
-    leaveQueue(socket.data.userId);
+    leaveQueue(io, socket.data.userId);
     leavePreviousRoom(io, socket);
     const room = createRoom({
       // `competitive` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038 ข้อ 5)
@@ -99,7 +105,7 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     const room = getRoomByCode(payload.roomCode);
     if (!room) throw socketErrors.roomNotFound();
 
-    leaveQueue(socket.data.userId);
+    leaveQueue(io, socket.data.userId);
     leavePreviousRoom(io, socket, room.roomId);
     if (payload.as === 'spectator') await joinAsSpectator(io, socket, room);
     else await joinAsPlayer(io, socket, room);

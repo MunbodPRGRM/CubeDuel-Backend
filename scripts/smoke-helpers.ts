@@ -73,6 +73,19 @@ export function waitFor<T>(socket: Socket, event: string, timeoutMs = 30_000): P
 }
 
 /**
+ * กดยอมรับให้อัตโนมัติทุกครั้งที่คิวเจอกลุ่ม (ADR-077)
+ *
+ * ตั้งแต่มี `READY_CHECK` ห้องไม่ถูกสร้างจนกว่าทุกคนจะส่ง `queue:accept` — เทสส่วนใหญ่
+ * สนใจสิ่งที่เกิด **หลัง** ยืนยันครบ จึงยิงให้เลยแล้วรอ `queue:matched` ต่อได้เหมือนเดิม
+ * (เคสที่ตั้งใจทดสอบการปฏิเสธ/หมดเวลาจะไม่เรียกตัวนี้ แล้วคุม `queue:accept` เอง)
+ */
+export function autoAcceptMatches(socket: Socket): void {
+  socket.on('queue:match_found', () => {
+    void emit(socket, 'queue:accept', {});
+  });
+}
+
+/**
  * ท่าที่ทำให้คิวบ์กลับมาแก้เสร็จ = ย้อน scramble
  * cubing.js เขียน 180° ตอน invert เป็น `U2'` แต่บนสายส่งรับแค่ `U2` (game-rules.md ข้อ 11)
  */

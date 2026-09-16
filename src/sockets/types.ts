@@ -135,6 +135,37 @@ export interface QueueLeaveResult {
   /** false = ไม่ได้อยู่ในคิวอยู่แล้ว (ไม่ถือว่าผิดพลาด) */
   left: boolean;
 }
+
+/**
+ * คนอื่นในกลุ่มที่รอยืนยัน — **ยังไม่มีห้อง** จึงไม่มี `isHost` / `isReady` / `connected`
+ * เหมือน `PlayerPublic` (ADR-077 ข้อ 3)
+ */
+export interface QueueRival {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** Elo ของ cubeType ที่กำลังจะแข่ง */
+  eloRating: number;
+}
+export interface QueueMatchFoundPayload {
+  kind: QueueKind;
+  cubeType: CubeType;
+  /** **ไม่รวมตัวเอง** — 1 คนสำหรับคิว 1v1 · 2–3 คนสำหรับคิวหลายคน */
+  rivals: QueueRival[];
+  /** จำนวนคนทั้งกลุ่ม **รวมตัวเอง** */
+  groupSize: number;
+  /** กดยอมรับไปแล้วกี่คน (รวมตัวเอง) — ใช้โชว์ "2/4" ในห้องหลายคน */
+  acceptedCount: number;
+  /** เรากดยอมรับไปแล้วหรือยัง — payload เป็นสถานะทั้งใบ ไม่ใช่ delta (ADR-077 ข้อ 6) */
+  youAccepted: boolean;
+  /** เวลาของนาฬิกา server ที่หมดเวลายืนยัน — **ไม่ส่งเป็นจำนวนวินาที** */
+  expiresAtTs: number;
+}
+export interface QueueAcceptResult {
+  /** = `acceptedCount` หลังนับครั้งนี้แล้ว */
+  accepted: number;
+  groupSize: number;
+}
 export interface QueueStatusPayload {
   /** ช่องคิวที่กำลังรออยู่ — client เดาเองไม่ได้เพราะ server พาเข้าคิวเองได้ (ADR-044 ข้อ 2) */
   kind: QueueKind;
@@ -154,7 +185,14 @@ export interface QueueMatchedPayload {
   players: PlayerPublic[];
 }
 export interface QueueTimeoutPayload {
+  /** รออยู่ในคิวมาทั้งหมดกี่ ms (ไม่ใช่ 12 วินาทีของช่วงยืนยัน) */
   waitedMs: number;
+  /**
+   * หมดเวลาตัวไหน — ทั้งสองแบบแปลว่า **ออกจากคิวไปแล้ว** เหมือนกัน (ADR-077 ข้อ 6)
+   *   - `no_match` = รอครบ 180 วินาทีแล้วไม่เจอใคร (game-rules.md ข้อ 8)
+   *   - `ready_check` = เจอคู่แล้วแต่ไม่กดยืนยันภายใน 12 วินาที
+   */
+  reason: 'no_match' | 'ready_check';
 }
 
 export interface RoomCreatePayload {
@@ -255,6 +293,10 @@ export interface ClientToServerEvents {
   'net:ping': (payload: NetPingPayload, ack?: AckFn<NetPingResult>) => void;
   'queue:join': (payload: QueueJoinPayload, ack?: AckFn<QueueJoinResult>) => void;
   'queue:leave': (payload: Record<string, never>, ack?: AckFn<QueueLeaveResult>) => void;
+  /** ยืนยันว่าจะเล่นกลุ่มที่เจอ — กดซ้ำไม่ใช่ error (ADR-077) */
+  'queue:accept': (payload: Record<string, never>, ack?: AckFn<QueueAcceptResult>) => void;
+  /** ปฏิเสธกลุ่มที่เจอ → ออกจากคิว มีผลเท่ากับ `queue:leave` (ADR-077) */
+  'queue:decline': (payload: Record<string, never>, ack?: AckFn<QueueLeaveResult>) => void;
   'room:create': (payload: RoomCreatePayload, ack?: AckFn<RoomCreateResult>) => void;
   'room:join': (payload: RoomJoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'room:rejoin': (payload: RoomRejoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
@@ -274,6 +316,8 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   'queue:status': (payload: QueueStatusPayload) => void;
+  /** เจอกลุ่มแล้ว **ยังไม่มีห้อง** — ส่งซ้ำทุกครั้งที่มีคนกดยอมรับ (ADR-077) */
+  'queue:match_found': (payload: QueueMatchFoundPayload) => void;
   'queue:matched': (payload: QueueMatchedPayload) => void;
   'queue:timeout': (payload: QueueTimeoutPayload) => void;
 

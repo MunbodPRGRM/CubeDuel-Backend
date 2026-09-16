@@ -5,7 +5,8 @@
  * รันด้วย: npx tsx scripts/smoke-socket.ts
  *
  * ครอบ: handshake · net:ping · create/join ด้วยรหัสห้อง · ready · ผู้ชม ·
- *       เข้าห้องเดิมด้วย socket ใหม่ (rejoin) · ออกจากห้อง · การโอน host · เคส error
+ *       เข้าห้องเดิมด้วย socket ใหม่ (rejoin) · ออกจากห้อง · การโอน host · เคส error ·
+ *       เข้าสู่ระบบใหม่เตะสายเก่า (ADR-076)
  */
 import { io, type Socket } from 'socket.io-client';
 
@@ -36,6 +37,18 @@ async function login(identifier: string): Promise<string> {
   if (!res.ok || !body.data)
     throw new Error(`เข้าสู่ระบบ ${identifier} ไม่ผ่าน: ${JSON.stringify(body)}`);
   return body.data.accessToken;
+}
+
+/** เหมือน `login()` แต่คืน refresh token มาด้วย — ใช้ทดสอบว่าเซสชันเก่าถูกเพิกถอนจริง (ADR-076) */
+async function loginSession(identifier: string): Promise<{ access: string; refresh: string }> {
+  const res = await fetch(`${API}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identifier, password: SEED_PASSWORD }),
+  });
+  const body = (await res.json()) as { data?: { accessToken: string; refreshToken: string } };
+  if (!res.ok || !body.data) throw new Error(`เข้าสู่ระบบ ${identifier} ไม่ผ่าน`);
+  return { access: body.data.accessToken, refresh: body.data.refreshToken };
 }
 
 type Ack<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
@@ -329,7 +342,59 @@ async function main(): Promise<void> {
     afterGhost.ok ? afterGhost.data.snapshot.players : afterGhost,
   );
 
-  for (const socket of [alice, bob2, carol, aliceTab2]) socket.close();
+  // ---------------------------------------------------------------- หนึ่งบัญชีทีละเครื่อง
+
+  /**
+   * ADR-076 — เข้าสู่ระบบใหม่ที่ไหนก็ตาม สายเก่า **ทุกสาย** ของบัญชีนั้นต้องได้ `session:revoked`
+   * แล้วถูกตัด และ refresh token ใบเก่าต้องใช้ต่ออายุไม่ได้อีก
+   * ใช้ carol (`nattapong`) เพราะไม่มีห้องค้างอยู่แล้วตอนนี้
+   */
+  console.log('\nหนึ่งบัญชีทีละเครื่อง — เข้าสู่ระบบใหม่เตะสายเก่า (ADR-076)');
+  const carolTab2 = await connect(tokenC);
+  const revokedTab1 = waitFor<{ reason: string }>(carol, 'session:revoked', 3_000);
+  const revokedTab2 = waitFor<{ reason: string }>(carolTab2, 'session:revoked', 3_000);
+  const goneTab1 = waitFor<string>(carol, 'disconnect', 3_000);
+
+  const second = await loginSession('nattapong');
+  const kicked1 = await revokedTab1;
+  const kicked2 = await revokedTab2;
+  check(
+    'สายเก่าได้ session:revoked พร้อมเหตุผล',
+    kicked1?.reason === 'signed_in_elsewhere',
+    kicked1,
+  );
+  check(
+    'ทุกแท็บของเซสชันเก่าโดนด้วย ไม่ใช่แค่แท็บเดียว',
+    kicked2?.reason === 'signed_in_elsewhere',
+    kicked2,
+  );
+  check('สายเก่าถูกตัดจริง', (await goneTab1) !== null);
+
+  const fresh = await connect(second.access);
+  const selfKick = await waitFor<{ reason: string }>(fresh, 'session:revoked', 700);
+  check('สายใหม่ไม่โดนเตะตัวเอง', selfKick === null, selfKick);
+
+  // เข้าสู่ระบบอีกรอบ → refresh token ของรอบที่แล้วต้องตายไปด้วย
+  const third = await loginSession('nattapong');
+  const staleRefresh = await fetch(`${API}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refreshToken: second.refresh }),
+  });
+  check('refresh token ของเซสชันเก่าใช้ไม่ได้แล้ว → 401', staleRefresh.status === 401, {
+    status: staleRefresh.status,
+  });
+
+  const liveRefresh = await fetch(`${API}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refreshToken: third.refresh }),
+  });
+  check('refresh token ของเซสชันล่าสุดยังใช้ได้ → 200', liveRefresh.status === 200, {
+    status: liveRefresh.status,
+  });
+
+  for (const socket of [alice, bob2, carol, aliceTab2, carolTab2, fresh]) socket.close();
 
   console.log(`\nสรุป: ผ่าน ${passed} · ไม่ผ่าน ${failed}\n`);
   process.exit(failed === 0 ? 0 : 1);

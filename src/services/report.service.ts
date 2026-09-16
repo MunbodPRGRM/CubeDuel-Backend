@@ -2,6 +2,7 @@ import {
   Prisma,
   ReportAction,
   ReportStatus,
+  UserRole,
   UserStatus,
   type Report,
   type User,
@@ -16,7 +17,12 @@ import type {
   CreateReportInput,
   ResolveReportInput,
 } from '../schemas/report.schema.js';
-import { USER_STATUS_TO_API, type ApiUserStatus } from '../types/api.js';
+import {
+  USER_ROLE_TO_API,
+  USER_STATUS_TO_API,
+  type ApiUserRole,
+  type ApiUserStatus,
+} from '../types/api.js';
 
 /**
  * ระบบรายงานผู้เล่น (docs/api-contract.md ข้อ 8)
@@ -52,7 +58,13 @@ export interface AdminReportDto {
   reportStatus: 'pending' | 'resolved';
   createdAt: string;
   reporter: ReportUserDto;
-  reported: ReportUserDto & { bio: string | null; status: ApiUserStatus; reportCount: number };
+  /** `role` มีไว้ให้หน้าจอปิดตัวเลือกลงโทษไว้ก่อนกด — ลงโทษบัญชีแอดมินไม่ได้ (ADR-075 ข้อ 1 กฎ ②) */
+  reported: ReportUserDto & {
+    bio: string | null;
+    status: ApiUserStatus;
+    role: ApiUserRole;
+    reportCount: number;
+  };
   matchId: number | null;
   multiplayerMatchId: number | null;
   reviewedBy: number | null;
@@ -183,6 +195,7 @@ const adminReportInclude = {
       // รายงานเรื่อง "ข้อความแนะนำตัวไม่เหมาะสม" ต้องตัดสินได้ในหน้าเดียว ไม่ต้องเปิดโปรไฟล์อีกแท็บ (ADR-066 ข้อ 5)
       bio: true,
       status: true,
+      role: true,
       // แอดมินต้องเห็นว่าเป็นครั้งแรกหรือครั้งที่ 12 ก่อนตัดสิน
       _count: { select: { reportsAgainst: true } },
     },
@@ -204,6 +217,7 @@ function toAdminReportDto(row: AdminReportRow): AdminReportDto {
       nickname: row.reported.nickname,
       bio: row.reported.bio,
       status: USER_STATUS_TO_API[row.reported.status],
+      role: USER_ROLE_TO_API[row.reported.role],
       reportCount: row.reported._count.reportsAgainst,
     },
     matchId: row.matchId,
@@ -265,6 +279,27 @@ export async function resolveReport(
   if (!report) throw errors.notFound('ไม่พบรายงานที่ต้องการ');
   if (report.reportStatus === ReportStatus.RESOLVED) {
     throw errors.conflict('รายงานนี้ถูกตัดสินไปแล้ว');
+  }
+
+  /**
+   * ตัดสินคดีของตัวเองไม่ได้ — **ทุก action ไม่ใช่แค่ `suspend`** เพราะกด `none`
+   * ปัดตกรายงานที่ร้องเรียนตัวเองก็เสียหายพอกัน และตัดสินแล้วเปิดใหม่ไม่ได้ (ADR-075 ข้อ 1 กฎ ①)
+   */
+  if (report.reportedId === adminId) {
+    throw errors.forbidden('รายงานนี้เกี่ยวกับบัญชีของคุณ ต้องให้แอดมินคนอื่นเป็นคนตัดสิน');
+  }
+
+  // บทลงโทษใช้กับบัญชีแอดมินไม่ได้ · ปิดเรื่องด้วย `none` / `warning` ได้ตามปกติ (กฎ ②)
+  if (input.action === 'suspend' || input.action === 'reset_rating') {
+    const reported = await prisma.user.findUnique({
+      where: { userId: report.reportedId },
+      select: { role: true },
+    });
+    if (reported?.role === UserRole.ADMIN) {
+      throw errors.forbidden(
+        'ผู้ถูกรายงานเป็นแอดมิน จึงสั่งระงับบัญชีหรือรีเซ็ตคะแนนไม่ได้ — ปิดเรื่องด้วย "ไม่ดำเนินการ" หรือ "ตักเตือน" ได้',
+      );
+    }
   }
 
   await prisma.$transaction(async (tx) => {

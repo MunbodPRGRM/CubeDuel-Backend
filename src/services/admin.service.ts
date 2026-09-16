@@ -1,4 +1,4 @@
-import { FlagVerdict, Prisma, UserStatus, type FlagReason } from '@prisma/client';
+import { FlagVerdict, Prisma, UserRole, UserStatus, type FlagReason } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { errors } from '../lib/errors.js';
 import { thaiDayRangeOf } from '../lib/week.js';
@@ -211,16 +211,16 @@ export async function listUsers(q: AdminUsersQueryInput) {
  *
  * ระงับแล้วต้อง **เพิกถอน refresh token ทุกอุปกรณ์** ไม่งั้นคนที่ถูกระงับยังเล่นต่อได้
  * จนกว่า token จะหมดอายุ (ADR-013 · ADR-023)
+ *
+ * **ระงับบัญชีแอดมินไม่ได้ ไม่ว่าตัวเองหรือคนอื่น** (ADR-075 ข้อ 1 กฎ ③) — ระบบไม่มีลำดับชั้น
+ * ใครกดก่อนชนะ และคนที่ถูกระงับปลดตัวเองไม่ได้ · **ปลดระงับยังทำได้** ไม่งั้นบัญชีแอดมิน
+ * ที่ถูกระงับไว้ก่อนหน้าจะกู้ไม่ได้เลย
  */
 export async function setUserStatus(
   adminId: number,
   userId: number,
   input: UpdateUserStatusInput,
 ): Promise<AdminUserDto> {
-  if (userId === adminId) {
-    throw errors.validation('ระงับบัญชีตัวเองไม่ได้', { status: 'ระงับบัญชีตัวเองไม่ได้' });
-  }
-
   const user = await prisma.user.findUnique({ where: { userId } });
   if (!user) throw errors.notFound('ไม่พบผู้ใช้รายนี้');
   if (user.deletedAt) {
@@ -230,6 +230,14 @@ export async function setUserStatus(
   }
 
   const suspending = input.status === 'suspended';
+
+  if (suspending && user.role === UserRole.ADMIN) {
+    throw errors.forbidden(
+      userId === adminId
+        ? 'ระงับบัญชีตัวเองไม่ได้'
+        : 'ระงับบัญชีของแอดมินด้วยกันไม่ได้ — ต้องลดสิทธิ์บัญชีนั้นก่อน',
+    );
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.user.update({

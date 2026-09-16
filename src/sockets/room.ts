@@ -94,7 +94,10 @@ export class Room {
   hostUserId: number | null = null;
   /** ไว้ให้สวีปเปอร์ยุบห้องร้าง — ทุก handler ที่แตะห้องต้องเรียก `touch()` */
   lastActivityTs = Date.now();
-  /** จำนวนผู้ชมสูงสุดที่เคยมี — บันทึกลง `Match.spectator_count` ตอนจบ */
+  /**
+   * จำนวนผู้ชมสูงสุดของ **รอบนี้** — บันทึกลง `Match.spectator_count` / `MultiplayerMatch.spectator_count`
+   * ตอนจบ · เริ่มรอบใหม่นับจากคนที่ดูอยู่ตอนนั้น (`resetForNewRound` — ADR-079 ข้อ 3)
+   */
   peakSpectatorCount = 0;
   /**
    * `match_id` ของรอบล่าสุดที่บันทึกสำเร็จ — ส่งไปกับ snapshot เพื่อให้ client ที่พลาด
@@ -245,6 +248,8 @@ export class Room {
     // ผลของรอบก่อนยังอยู่ใน DB แต่ไม่ใช่ "ผลของห้องนี้ตอนนี้" แล้ว
     this.lastMatchId = null;
     this.lastMultiplayerMatchId = null;
+    // ไม่งั้นรอบที่ 2 เป็นต้นไปจะบันทึกค่าสูงสุดตลอดอายุห้อง (ADR-079 ข้อ 3)
+    this.peakSpectatorCount = this.spectators.size;
     this.phaseEndsAtTs = null;
     this.serverStartTs = null;
     for (const player of this.players.values()) {

@@ -133,9 +133,10 @@ export async function joinAsSpectator(
   room: Room,
 ): Promise<void> {
   const { userId } = socket.data;
-  // เล่มระบุผู้ชมไว้เฉพาะห้องสร้างเอง 1v1 — ห้องหลายคนไม่รองรับ (game-rules.md ข้อ 9)
-  if (room.roomKind === 'multiplayer') {
-    throw socketErrors.invalidState('ห้องผู้เล่นหลายคนไม่รองรับผู้ชม');
+  // ผู้ชมมีได้ทุกห้องที่มีรหัสห้อง (1v1 + หลายคนโหมด custom — ADR-079) · ห้องจากคิวไม่มีรหัส
+  // จึงมาทาง `room:join` ไม่ได้อยู่แล้ว ด่านนี้กันทาง `room:rejoin` กับโค้ดในอนาคต
+  if (room.roomCode === null) {
+    throw socketErrors.invalidState('ห้องที่มาจากการจับคู่ไม่รองรับผู้ชม');
   }
   const isNew = !room.spectators.has(userId);
   if (isNew && room.spectatorCount >= MAX_SPECTATORS) {

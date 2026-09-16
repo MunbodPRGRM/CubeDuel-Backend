@@ -58,12 +58,16 @@ export const HARD_TIMEOUT_MS: Record<ApiCubeType, number> = {
 /**
  * ทุกประเภทรูบิค — ใช้ตอนสมัครสมาชิกเพื่อสร้างแถว Rating ให้ครบ 4 แถว
  * (database-schema.md ตารางที่ 6: ผู้ใช้ 1 คน = Rating 4 แถวเสมอ)
+ *
+ * ⚠️ ลำดับในนี้ยังคุม**ลำดับของ array ที่ `GET /users/:userId/ratings` ส่งกลับ**ด้วย
+ * จึงเรียงให้ตรงกับ `CUBE_TYPES` ของ frontend (เฟส 13 ก้อนที่ 3 · 2026-09-16)
+ * — **จงใจไม่ตรงกับลำดับของ `enum CubeType` ใน `schema.prisma`** ห้ามเรียงใหม่ให้ตรงกับ schema
  */
 export const ALL_CUBE_TYPES: CubeType[] = [
   CubeType.CUBE_2X2X2,
   CubeType.CUBE_3X3X3,
-  CubeType.PYRAMINX,
   CubeType.PYRAMORPHIX,
+  CubeType.PYRAMINX,
 ];
 
 /** cost ของ bcrypt — ยิ่งสูงยิ่งช้าและยิ่งทนการเดารหัสผ่าน */

@@ -1,5 +1,6 @@
 /**
  * สโมคเทสเฟส 8 ก้อนที่ 2 — ข่าวสารและกิจกรรม (`/news` + `/admin/news`)
+ * ปรับตามเฟส 13 ก้อนที่ 22: เลิกอัปโหลดรูป → ปกเป็นคีย์ `cover` (ADR-084)
  *
  * ยิงผ่าน REST เหมือนเบราว์เซอร์จริง · ต้องรัน `npm run dev` กับ `npm run seed` ไว้ก่อน
  *
@@ -10,22 +11,16 @@
  * ถ้าไม่ตรวจตรงนี้ ก็ไม่มีอะไรจับได้เลยว่าลืมเขียน log
  */
 import { PrismaClient } from '@prisma/client';
-import { API, SERVER_URL, check, login, summary } from './smoke-helpers.ts';
+import { API, check, login, summary } from './smoke-helpers.ts';
 
 interface NewsDto {
   newsId: number;
   title: string;
   content?: string;
   excerpt?: string;
-  image: string | null;
+  cover: string;
   author: { userId: number; username: string };
 }
-
-/** PNG 1x1 จริง (base64) — ใช้ทดสอบทางที่ผ่าน */
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-  'base64',
-);
 
 async function api(
   path: string,
@@ -55,19 +50,6 @@ function jsonInit(
   };
 }
 
-function formInit(
-  method: string,
-  token: string,
-  fields: Record<string, string>,
-  file?: { name: string; type: string; bytes: Buffer },
-): RequestInit & { token: string } {
-  const form = new FormData();
-  for (const [key, value] of Object.entries(fields)) form.append(key, value);
-  if (file)
-    form.append('image', new Blob([new Uint8Array(file.bytes)], { type: file.type }), file.name);
-  return { method, token, body: form };
-}
-
 async function main(): Promise<void> {
   const admin = await login('admin');
   const member = await login('somchai');
@@ -92,7 +74,7 @@ async function main(): Promise<void> {
   });
   check('ไม่ล็อกอินสร้างข่าวไม่ได้ → 401', anonCreate.status === 401, anonCreate.status);
 
-  console.log('\n2) สร้างข่าวแบบไม่มีรูป (JSON)');
+  console.log('\n2) สร้างข่าวโดยไม่ส่งปก');
   const longBody = `บรรทัดแรกของข่าว\nบรรทัดที่สอง ${'ยาว'.repeat(80)}`;
   const created = await api(
     '/admin/news',
@@ -102,7 +84,7 @@ async function main(): Promise<void> {
   check('ตอบ 201', created.status === 201, created);
   check('หัวข้อถูก trim', news?.title === 'ทดสอบข่าวสโมค', news?.title);
   check('ผู้เขียนคือแอดมินที่ยิง', news?.author.userId === admin.userId, news?.author);
-  check('ข่าวใหม่ยังไม่มีรูป', news?.image === null, news?.image);
+  check('ไม่ส่งปก = ได้ปก general', news?.cover === 'general', news?.cover);
 
   const detail = await api(`/news/${news.newsId}`);
   const detailDto = detail.body.data as NewsDto;
@@ -123,86 +105,57 @@ async function main(): Promise<void> {
     inList?.excerpt?.length,
   );
 
-  console.log('\n3) สร้างข่าวพร้อมรูป (multipart) แล้วเปิดรูปจริง');
-  const withImage = await api(
+  console.log('\n3) สร้างข่าวพร้อมปก');
+  const withCover = await api(
     '/admin/news',
-    formInit(
-      'POST',
-      admin.token,
-      { title: 'ข่าวมีรูป', content: 'เนื้อหา' },
-      {
-        name: 'cover.png',
-        type: 'image/png',
-        bytes: PNG_1X1,
-      },
-    ),
+    jsonInit('POST', admin.token, { title: 'ข่าวมีปก', content: 'เนื้อหา', cover: 'maintenance' }),
   );
-  const imageNews = withImage.body.data as NewsDto;
-  check('ตอบ 201', withImage.status === 201, withImage);
+  const coverNews = withCover.body.data as NewsDto;
+  check('ตอบ 201', withCover.status === 201, withCover);
+  check('ได้ปกตามที่ส่ง', coverNews?.cover === 'maintenance', coverNews?.cover);
+  const coverDetail = await api(`/news/${coverNews.newsId}`);
   check(
-    'พาธรูปขึ้นต้นด้วย /uploads/news/',
-    imageNews?.image?.startsWith('/uploads/news/') === true,
-    imageNews?.image,
+    'หน้ารายละเอียดคืน cover',
+    (coverDetail.body.data as NewsDto)?.cover === 'maintenance',
+    coverDetail.body.data,
   );
   check(
-    'นามสกุลเป็น .png ตามชนิดจริง',
-    imageNews?.image?.endsWith('.png') === true,
-    imageNews?.image,
+    'ไม่มีฟิลด์ image ใน response แล้ว',
+    coverDetail.body.data !== undefined && !('image' in (coverDetail.body.data as object)),
   );
 
-  const imageRes = await fetch(`${SERVER_URL}${imageNews.image}`);
-  check('เปิดรูปผ่าน HTTP ได้ 200', imageRes.status === 200, imageRes.status);
+  for (const key of ['general', 'update', 'maintenance', 'penalty', 'event']) {
+    const res = await api(
+      `/admin/news/${coverNews.newsId}`,
+      jsonInit('PATCH', admin.token, { cover: key }),
+    );
+    check(`ปก ${key} ใช้ได้`, res.status === 200 && (res.body.data as NewsDto)?.cover === key, res);
+  }
+
+  console.log('\n4) ค่าที่ต้องถูกปฏิเสธ');
+  const badCover = await api(
+    '/admin/news',
+    jsonInit('POST', admin.token, { title: 'ปกผิด', content: 'x', cover: 'ban' }),
+  );
+  check('คีย์ปกนอกรายการ → 400', badCover.status === 400, badCover);
+  const nullCover = await api(
+    '/admin/news',
+    jsonInit('POST', admin.token, { title: 'ปก null', content: 'x', cover: null }),
+  );
+  check('cover เป็น null → 400', nullCover.status === 400, nullCover);
+  const legacy = await api(
+    '/admin/news',
+    jsonInit('POST', admin.token, { title: 'ฟิลด์รุ่นเก่า', content: 'x', image: '/uploads/x.png' }),
+  );
+  const legacyDto = legacy.body.data as NewsDto;
   check(
-    'content-type เป็น image/png',
-    imageRes.headers.get('content-type')?.includes('image/png') === true,
-    imageRes.headers.get('content-type'),
+    'ส่ง image รุ่นเก่ามา = ถูกเมิน ได้ปก general',
+    legacy.status === 201 && legacyDto?.cover === 'general',
+    legacy,
   );
-
-  console.log('\n4) ไฟล์ที่ต้องถูกปฏิเสธ');
-  const fakePng = await api(
-    '/admin/news',
-    formInit(
-      'POST',
-      admin.token,
-      { title: 'ไฟล์ปลอม', content: 'x' },
-      {
-        name: 'evil.png',
-        type: 'image/png',
-        bytes: Buffer.from('<?php echo "not a png"; ?>'),
-      },
-    ),
-  );
-  check('ไฟล์ที่หัวไม่ใช่รูป → 400', fakePng.status === 400, fakePng);
-
-  const tooBig = await api(
-    '/admin/news',
-    formInit(
-      'POST',
-      admin.token,
-      { title: 'ไฟล์ใหญ่', content: 'x' },
-      {
-        name: 'big.png',
-        type: 'image/png',
-        bytes: Buffer.concat([PNG_1X1, Buffer.alloc(2 * 1024 * 1024)]),
-      },
-    ),
-  );
-  check('ไฟล์เกิน 2 MB → 400', tooBig.status === 400, tooBig);
-
-  const wrongType = await api(
-    '/admin/news',
-    formInit(
-      'POST',
-      admin.token,
-      { title: 'ไฟล์ผิดชนิด', content: 'x' },
-      {
-        name: 'doc.pdf',
-        type: 'application/pdf',
-        bytes: Buffer.from('%PDF-1.4'),
-      },
-    ),
-  );
-  check('ชนิดไฟล์นอกรายการ → 400', wrongType.status === 400, wrongType);
+  if (legacyDto?.newsId) {
+    await api(`/admin/news/${legacyDto.newsId}`, { method: 'DELETE', token: admin.token });
+  }
 
   const noTitle = await api(
     '/admin/news',
@@ -217,61 +170,26 @@ async function main(): Promise<void> {
 
   console.log('\n5) แก้ไขข่าว');
   const patched = await api(
-    `/admin/news/${imageNews.newsId}`,
-    jsonInit('PATCH', admin.token, { title: 'ข่าวมีรูป (แก้แล้ว)' }),
+    `/admin/news/${coverNews.newsId}`,
+    jsonInit('PATCH', admin.token, { title: 'ข่าวมีปก (แก้แล้ว)' }),
   );
   const patchedDto = patched.body.data as NewsDto;
-  check('หัวข้อเปลี่ยน', patchedDto?.title === 'ข่าวมีรูป (แก้แล้ว)', patchedDto?.title);
+  check('หัวข้อเปลี่ยน', patchedDto?.title === 'ข่าวมีปก (แก้แล้ว)', patchedDto?.title);
   check(
     'ไม่ส่ง content มา = เนื้อข่าวไม่หาย',
     patchedDto?.content === 'เนื้อหา',
     patchedDto?.content,
   );
-  check('ไม่ส่งรูปมา = รูปเดิมยังอยู่', patchedDto?.image === imageNews.image, patchedDto?.image);
+  check('ไม่ส่ง cover มา = ปกเดิมยังอยู่', patchedDto?.cover === 'event', patchedDto?.cover);
 
-  const conflict = await api(
-    `/admin/news/${imageNews.newsId}`,
-    formInit(
-      'PATCH',
-      admin.token,
-      { removeImage: 'true' },
-      {
-        name: 'new.png',
-        type: 'image/png',
-        bytes: PNG_1X1,
-      },
-    ),
+  const badPatch = await api(
+    `/admin/news/${coverNews.newsId}`,
+    jsonInit('PATCH', admin.token, { cover: 'poster' }),
   );
-  check('ส่งรูปใหม่พร้อมสั่งลบรูป → 400', conflict.status === 400, conflict);
-
-  const replaced = await api(
-    `/admin/news/${imageNews.newsId}`,
-    formInit('PATCH', admin.token, {}, { name: 'new.png', type: 'image/png', bytes: PNG_1X1 }),
-  );
-  const replacedDto = replaced.body.data as NewsDto;
-  check('ส่งมาแค่ไฟล์รูป (ไม่มีช่องข้อความ) ก็แก้ได้ → 200', replaced.status === 200, replaced);
-  check(
-    'เปลี่ยนรูปได้ (พาธเปลี่ยน)',
-    typeof replacedDto?.image === 'string' && replacedDto.image !== imageNews.image,
-    replacedDto?.image,
-  );
-  const oldImage = await fetch(`${SERVER_URL}${imageNews.image}`);
-  check('ไฟล์รูปเก่าถูกลบทิ้ง → 404', oldImage.status === 404, oldImage.status);
-
-  const removed = await api(
-    `/admin/news/${imageNews.newsId}`,
-    jsonInit('PATCH', admin.token, { removeImage: true }),
-  );
-  check(
-    'สั่งลบรูปแล้ว image เป็น null',
-    (removed.body.data as NewsDto)?.image === null,
-    removed.body.data,
-  );
-  const removedFile = await fetch(`${SERVER_URL}${replacedDto.image}`);
-  check('ไฟล์ที่ถูกถอดออกถูกลบทิ้ง → 404', removedFile.status === 404, removedFile.status);
+  check('PATCH ปกนอกรายการ → 400', badPatch.status === 400, badPatch);
 
   const emptyPatch = await api(
-    `/admin/news/${imageNews.newsId}`,
+    `/admin/news/${coverNews.newsId}`,
     jsonInit('PATCH', admin.token, {}),
   );
   check('PATCH ที่ไม่มีอะไรให้แก้ → 400', emptyPatch.status === 400, emptyPatch);
@@ -279,12 +197,12 @@ async function main(): Promise<void> {
   check('แก้ข่าวที่ไม่มีอยู่ → 404', missing.status === 404, missing);
 
   console.log('\n6) ลบข่าว');
-  const deleted = await api(`/admin/news/${imageNews.newsId}`, {
+  const deleted = await api(`/admin/news/${coverNews.newsId}`, {
     method: 'DELETE',
     token: admin.token,
   });
   check('ลบสำเร็จ → 200', deleted.status === 200, deleted);
-  const gone = await api(`/news/${imageNews.newsId}`);
+  const gone = await api(`/news/${coverNews.newsId}`);
   check('อ่านข่าวที่ลบแล้ว → 404', gone.status === 404, gone.status);
 
   console.log('\n7) AdminAuditLog ครบทุกการกระทำ (อ่าน DB ตรง ๆ — ไม่มี endpoint ให้อ่าน)');
@@ -295,15 +213,15 @@ async function main(): Promise<void> {
     take: 20,
   });
   const forThisNews = logs.filter(
-    (l) => (l.detail as { newsId?: number } | null)?.newsId === imageNews.newsId,
+    (l) => (l.detail as { newsId?: number } | null)?.newsId === coverNews.newsId,
   );
   check(
     'มี log ตอนสร้าง',
     forThisNews.some((l) => l.action === 'create_news'),
   );
   check(
-    'มี log ตอนแก้ (3 ครั้ง)',
-    forThisNews.filter((l) => l.action === 'update_news').length === 3,
+    'มี log ตอนแก้ (6 ครั้ง — ปก 5 + หัวข้อ 1)',
+    forThisNews.filter((l) => l.action === 'update_news').length === 6,
     forThisNews.filter((l) => l.action === 'update_news').length,
   );
   check(
@@ -312,12 +230,12 @@ async function main(): Promise<void> {
   );
   const updateLog = forThisNews.find((l) => l.action === 'update_news');
   check(
-    'log ตอนแก้เก็บค่าเก่าไว้ด้วย',
-    (updateLog?.detail as { before?: unknown } | null)?.before !== undefined,
+    'log ตอนแก้เก็บค่าเก่าไว้ด้วย (มี cover)',
+    (updateLog?.detail as { before?: { cover?: string } } | null)?.before?.cover !== undefined,
     updateLog?.detail,
   );
 
-  // เก็บกวาดข่าวที่สร้างระหว่างเทส (ข่าวมีรูปถูกลบไปแล้วในข้อ 6)
+  // เก็บกวาดข่าวที่สร้างระหว่างเทส (ข่าวมีปกถูกลบไปแล้วในข้อ 6)
   await api(`/admin/news/${news.newsId}`, { method: 'DELETE', token: admin.token });
   await prisma.$disconnect();
 

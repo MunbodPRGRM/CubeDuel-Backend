@@ -10,11 +10,10 @@ export const API_BASE_PATH = '/api/v1';
 
 /**
  * header ความปลอดภัยพื้นฐาน — เขียนเองสามบรรทัดแทนการลง helmet (ADR-055 ข้อ 4)
- * backend นี้ส่งแค่ JSON กับรูปข่าว ไม่มีหน้า HTML ให้ต้องตั้ง CSP
- *   - nosniff: เบราว์เซอร์ต้องเชื่อ Content-Type ห้ามเดาเอง — สำคัญกับไฟล์ใน `/uploads`
+ * backend นี้ส่งแค่ JSON ไม่มีหน้า HTML ให้ต้องตั้ง CSP · ไม่เสิร์ฟไฟล์แล้ว (ADR-084)
+ *   - nosniff: เบราว์เซอร์ต้องเชื่อ Content-Type ห้ามเดาเอง
  *   - DENY: ไม่มีอะไรของ backend ที่ควรถูกฝังใน iframe
  *   - no-referrer: URL ของ API ไม่ต้องติดไปกับลิงก์ออกนอก
- * **ไม่ตั้ง `Cross-Origin-Resource-Policy`** — production เว็บกับ API อยู่คนละโดเมน รูปข่าวจะโหลดไม่ขึ้น
  */
 const securityHeaders: RequestHandler = (_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -35,21 +34,6 @@ export function createApp() {
   app.use(cors({ origin: env.corsOrigin, credentials: true }));
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
-
-  /**
-   * ไฟล์ที่แอดมินอัปโหลด (รูปข่าว) — อยู่นอก `/api/v1` เพราะเป็นไฟล์ ไม่ใช่ JSON
-   * `index: false` กันไม่ให้เปิดดูรายชื่อไฟล์ในโฟลเดอร์ · `dotfiles: 'deny'` กันไฟล์ซ่อน
-   */
-  app.use(
-    '/uploads',
-    express.static(env.uploadsDir, {
-      index: false,
-      dotfiles: 'deny',
-      maxAge: env.isProduction ? '7d' : 0,
-      // ชื่อไฟล์สุ่มไม่ซ้ำอยู่แล้ว รูปเดิมจึงไม่มีวันเปลี่ยนเนื้อ — cache ยาวได้
-      immutable: env.isProduction,
-    }),
-  );
 
   app.use(API_BASE_PATH, router);
 

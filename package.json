@@ -30,6 +30,7 @@
     "smoke:dev-finish": "tsx scripts/smoke-dev-finish.ts",
     "smoke:camera": "tsx scripts/smoke-camera.ts",
     "smoke:inspection-ready": "tsx scripts/smoke-inspection-ready.ts",
+    "smoke:switch-seat": "tsx scripts/smoke-switch-seat.ts",
     "load:rooms": "tsx scripts/load-rooms.ts",
     "perf:leaderboard": "tsx scripts/perf-leaderboard.ts"
   },

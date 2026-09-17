@@ -89,6 +89,7 @@ interface Snapshot {
   players: { userId: number; username: string; isHost: boolean; isReady: boolean }[];
   spectatorCount: number;
   scramble: string | null;
+  host: { userId: number; username: string; seat: 'player' | 'spectator' } | null;
 }
 
 async function main(): Promise<void> {
@@ -289,17 +290,28 @@ async function main(): Promise<void> {
   const snapshotAfter = await stateAfter;
   check('ห้องเหลือผู้เล่น 1 คน', snapshotAfter?.players.length === 1, snapshotAfter?.players);
 
-  const aborted = waitFor<{ reason: string }>(carol, 'room:aborted');
+  // ADR-082 ข้อ 4 — เดิมผู้เล่นเหลือ 0 = ยุบห้อง · ตอนนี้ยุบเมื่อไม่เหลือใครเลย ผู้ชมได้เป็นหัวห้องแทน
+  const carolHost = waitFor<{ newHostUserId: number }>(carol, 'room:host_changed');
+  const noAbort = waitFor<{ reason: string }>(carol, 'room:aborted', 800);
   await emit(bob2, 'room:leave', {});
-  const abortEvent = await aborted;
+  check('ไม่เหลือผู้เล่นแต่มีผู้ชม → ผู้ชมได้ room:host_changed', (await carolHost) !== null);
+  check('… และห้องไม่ถูกยุบ', (await noAbort) === null);
+  const carolView = await emit<{ snapshot: Snapshot }>(carol, 'room:rejoin', { roomId });
   check(
-    'ไม่เหลือผู้เล่น → ห้องถูกยุบ แจ้งผู้ชมด้วย',
-    abortEvent?.reason === 'host_left',
-    abortEvent,
+    'snapshot.host = ผู้ชมคนนั้น (seat: spectator)',
+    carolView.ok &&
+      carolView.data.snapshot.host?.username === 'nattapong' &&
+      carolView.data.snapshot.host.seat === 'spectator',
+    carolView.ok ? carolView.data.snapshot.host : carolView,
   );
 
+  await emit(carol, 'room:leave', {});
   const gone = await emit(carol, 'room:join', { roomCode, as: 'spectator' });
-  check('ห้องที่ยุบแล้วเข้าไม่ได้อีก', !gone.ok && gone.error.code === 'E_ROOM_NOT_FOUND', gone);
+  check(
+    'ไม่เหลือใครเลย → ห้องถูกยุบ เข้าไม่ได้อีก',
+    !gone.ok && gone.error.code === 'E_ROOM_NOT_FOUND',
+    gone,
+  );
 
   // ---------------------------------------------------------------- หลายแท็บของคนเดียวกัน
   console.log('\nเปิดหลายแท็บ (คนเดียวกัน = ที่นั่งเดียว)');

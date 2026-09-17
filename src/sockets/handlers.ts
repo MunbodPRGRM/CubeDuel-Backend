@@ -12,6 +12,7 @@ import {
   roomJoinSchema,
   roomReadySchema,
   roomRejoinSchema,
+  roomSwitchSeatSchema,
   solveCameraSchema,
   solveInspectionReadySchema,
   solveMoveSchema,
@@ -39,6 +40,7 @@ import {
   joinAsSpectator,
   leavePreviousRoom,
   leaveRoom,
+  switchSeat,
 } from './room-service.js';
 
 /** เพดานของ RTT ที่ยอมรับจาก client — สูงกว่านี้ถือว่าเน็ตเสียหรือค่าปลอม */
@@ -109,6 +111,11 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
 
     leaveQueue(io, socket.data.userId);
     leavePreviousRoom(io, socket, room.roomId);
+    // อยู่ห้องนี้แล้วแต่คนละที่นั่ง = สลับที่นั่ง · เดิมได้ที่นั่งซ้อนทั้งสองฝั่ง (ADR-082 ข้อ 1)
+    const current = membershipOf(socket.data.userId);
+    if (current?.roomId === room.roomId && current.seat !== payload.as) {
+      await switchSeat(io, socket, payload.as);
+    }
     if (payload.as === 'spectator') await joinAsSpectator(io, socket, room);
     else await joinAsPlayer(io, socket, room);
 
@@ -155,6 +162,12 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     });
     broadcastState(io, room);
     return null;
+  });
+
+  /** สลับผู้เล่น ↔ ผู้ชมในห้องเดิม — สิทธิ์หัวห้องไม่หลุด (ADR-082) */
+  on(socket, 'room:switch_seat', roomSwitchSeatSchema, async (socket, payload) => {
+    const room = await switchSeat(io, socket, payload.to);
+    return { snapshot: room.snapshot() };
   });
 
   // ---------------------------------------------------------------- ลำดับการแข่ง

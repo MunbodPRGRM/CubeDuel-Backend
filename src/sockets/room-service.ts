@@ -18,6 +18,7 @@ import {
   spectatorRoomName,
   type AbortReason,
   type LeaveReason,
+  type Seat,
   type ServerToClientEvents,
 } from './types.js';
 
@@ -143,7 +144,10 @@ export async function joinAsSpectator(
     throw socketErrors.roomFull(`ห้องนี้มีผู้ชมครบ ${MAX_SPECTATORS} คนแล้ว`);
   }
 
-  room.addSpectatorSocket(userId, socket.id);
+  room.addSpectatorSocket(
+    { userId, username: socket.data.username, nickname: socket.data.nickname },
+    socket.id,
+  );
   socket.data.roomId = room.roomId;
   socket.data.seat = 'spectator';
   setMembership(userId, room.roomId, 'spectator');
@@ -151,6 +155,114 @@ export async function joinAsSpectator(
 
   if (isNew) emitToRoom(io, room, 'room:spectator_count', { count: room.spectatorCount });
   broadcastState(io, room);
+}
+
+// ---------------------------------------------------------------- สลับที่นั่ง
+
+/** state ที่สลับผู้เล่น ↔ ผู้ชมได้ — ระหว่างแข่งผู้เล่นสลับเป็นผู้ชม = หนีผลแพ้ (ADR-082 ข้อ 2) */
+function canSwitchSeat(room: Room): boolean {
+  return room.state === 'WAITING' || room.state === 'FINISHED';
+}
+
+/**
+ * ย้าย socket ทั้งชุดของคนหนึ่งไปอีก Socket.IO room ของห้องเดิม พร้อมอัปเดต `socket.data`
+ * ต้องย้าย **ทุกแท็บ** ไม่งั้นแท็บที่ค้างฝั่งเดิมได้ event ผิดชุด (ADR-082 ข้อ 1)
+ */
+async function moveSockets(
+  io: TypedServer,
+  room: Room,
+  socketIds: Iterable<string>,
+  to: Seat,
+): Promise<void> {
+  const [from, into] =
+    to === 'player'
+      ? [spectatorRoomName(room.roomId), playerRoomName(room.roomId)]
+      : [playerRoomName(room.roomId), spectatorRoomName(room.roomId)];
+  for (const socketId of socketIds) {
+    const target = io.sockets.sockets.get(socketId);
+    if (!target) continue;
+    await target.leave(from);
+    await target.join(into);
+    target.data.roomId = room.roomId;
+    target.data.seat = to;
+  }
+}
+
+/**
+ * `room:switch_seat` — สลับผู้เล่น ↔ ผู้ชมในห้องเดิม (ADR-082 · game-rules.md ข้อ 9)
+ *
+ * **ไม่ใช่ leave + join** — สิทธิ์หัวห้องไม่หลุด ห้องไม่ยุบ และไม่มีช่วงที่หลุดจากห้องให้คนอื่นแย่งที่นั่ง
+ * socket ที่สั่งถูกย้ายด้วยเสมอ แม้ยังไม่เคยเข้าห้องนี้ (แท็บใหม่ที่มาทาง `room:join`)
+ * ผู้เรียกเป็นคนตอบ snapshot กลับเอง
+ */
+export async function switchSeat(io: TypedServer, socket: TypedSocket, to: Seat): Promise<Room> {
+  const { userId } = socket.data;
+  const membership = membershipOf(userId);
+  if (!membership) throw socketErrors.roomNotFound('ยังไม่ได้อยู่ในห้องไหน');
+  const { room } = membership;
+
+  if (room.roomCode === null) {
+    throw socketErrors.invalidState('ห้องที่มาจากการจับคู่สลับผู้เล่น/ผู้ชมไม่ได้');
+  }
+  // กดพร้อมกันสองแท็บ / ปุ่มค้างจาก snapshot เก่า — ไม่ใช่ความผิดพลาด
+  if (membership.seat === to) return room;
+  if (!canSwitchSeat(room)) {
+    throw socketErrors.invalidState('สลับผู้เล่น/ผู้ชมได้เฉพาะก่อนเริ่มหรือหลังจบรอบ');
+  }
+
+  if (to === 'spectator') {
+    const player = room.players.get(userId);
+    if (!player) throw socketErrors.invalidState('ไม่พบที่นั่งของผู้เล่นในห้องนี้');
+    if (room.spectatorCount >= MAX_SPECTATORS) {
+      throw socketErrors.roomFull(`ห้องนี้มีผู้ชมครบ ${MAX_SPECTATORS} คนแล้ว`);
+    }
+
+    // socket ที่สั่งยังต่ออยู่ grace จึงไม่ควรมี — เผื่อแท็บเก่าหลุดหมดแล้วแท็บใหม่สั่งตรง ๆ
+    const timer = room.graceTimers.get(userId);
+    if (timer) clearTimeout(timer);
+    room.graceTimers.delete(userId);
+
+    // ไม่ใช่การออกจากห้อง → ไม่ส่ง `room:player_left` และไม่แตะสิทธิ์หัวห้อง (ADR-082 ข้อ 1, 3)
+    room.removePlayer(userId);
+    const socketIds = new Set([...player.sockets, socket.id]);
+    for (const socketId of socketIds) {
+      room.addSpectatorSocket(
+        { userId, username: player.username, nickname: player.nickname },
+        socketId,
+      );
+    }
+    setMembership(userId, room.roomId, 'spectator');
+    await moveSockets(io, room, socketIds, 'spectator');
+  } else {
+    if (room.isFull) throw socketErrors.roomFull('ห้องนี้มีผู้เล่นครบแล้ว');
+    const eloRating = await eloOf(userId, room.cubeType);
+
+    // ระหว่าง await อาจมีคนเข้ามาจนเต็ม / เริ่มรอบ / แท็บอื่นของเราสลับไปก่อนแล้ว
+    const current = membershipOf(userId);
+    if (current?.roomId !== room.roomId) throw socketErrors.roomNotFound('ไม่ได้อยู่ในห้องนี้แล้ว');
+    if (current.seat === 'player') return room;
+    if (!canSwitchSeat(room)) throw socketErrors.invalidState('ห้องนี้เริ่มแข่งไปแล้ว');
+    if (room.isFull) throw socketErrors.roomFull('ห้องนี้มีผู้เล่นครบแล้ว');
+
+    const spectator = room.spectators.get(userId);
+    const socketIds = new Set([...(spectator?.sockets ?? []), socket.id]);
+    room.removeSpectator(userId);
+    const player = room.addPlayer({
+      userId,
+      username: spectator?.username ?? socket.data.username,
+      nickname: spectator?.nickname ?? socket.data.nickname,
+      eloRating,
+    });
+    for (const socketId of socketIds) player.sockets.add(socketId);
+    setMembership(userId, room.roomId, 'player');
+    await moveSockets(io, room, socketIds, 'player');
+    emitToRoom(io, room, 'room:player_joined', { player: room.toPublicPlayer(player) });
+  }
+
+  room.touch();
+  emitToRoom(io, room, 'room:spectator_count', { count: room.spectatorCount });
+  broadcastState(io, room);
+  return room;
 }
 
 // ---------------------------------------------------------------- ออกจากห้อง
@@ -176,7 +288,7 @@ export function abortRoom(io: TypedServer, room: Room, reason: AbortReason, mess
   room.state = 'ABORTED';
   emitToRoom(io, room, 'room:aborted', { reason, message });
   for (const player of room.players.values()) detachSockets(io, room, player.sockets);
-  for (const sockets of room.spectators.values()) detachSockets(io, room, sockets);
+  for (const spectator of room.spectators.values()) detachSockets(io, room, spectator.sockets);
   io.socketsLeave(playerRoomName(room.roomId));
   io.socketsLeave(spectatorRoomName(room.roomId));
   disposeRoom(room);
@@ -241,21 +353,31 @@ export function leaveRoom(
   }
 
   // ผู้ชม
-  const spectatorSockets = room.spectators.get(userId);
-  if (!spectatorSockets) return null;
+  const spectator = room.spectators.get(userId);
+  if (!spectator) return null;
 
   if (reason === 'disconnected') {
     detachSockets(io, room, [socket.id]);
     // คืน false = ยังมีแท็บอื่นดูอยู่ → ยังไม่ถือว่าออกจากห้อง
     if (!room.removeSpectatorSocket(userId, socket.id)) return null;
   } else {
-    detachSockets(io, room, [...spectatorSockets, socket.id]);
+    detachSockets(io, room, [...spectator.sockets, socket.id]);
     room.removeSpectator(userId);
   }
 
   clearMembership(userId);
+  if (room.isEmpty) {
+    disposeRoom(room);
+    return null;
+  }
   emitToRoom(io, room, 'room:spectator_count', { count: room.spectatorCount });
-  if (room.isEmpty) disposeRoom(room);
+
+  // หัวห้องที่นั่งเป็นผู้ชมออก → โอนสิทธิ์ · `host` ใน snapshot เปลี่ยน จึงต้องส่ง state ตาม (ADR-082 ข้อ 3)
+  const newHost = room.reassignHostIfNeeded();
+  if (newHost !== null) {
+    emitToRoom(io, room, 'room:host_changed', { newHostUserId: newHost });
+    broadcastState(io, room);
+  }
   return null;
 }
 
@@ -284,11 +406,14 @@ export function removePlayerFromRoom(
   emitToRoom(io, room, 'room:player_left', { userId, reason });
   detachSockets(io, room, player.sockets);
 
+  // host คนใหม่อาจเป็นผู้ชมได้ถ้าไม่มีผู้เล่นเหลือ (ADR-082 ข้อ 3)
   const newHost = room.reassignHostIfNeeded();
   if (newHost !== null) emitToRoom(io, room, 'room:host_changed', { newHostUserId: newHost });
 
-  if (room.players.size === 0) {
-    abortRoom(io, room, 'host_left', 'ไม่มีผู้เล่นเหลืออยู่ในห้องแล้ว');
+  // ยุบเมื่อไม่เหลือใครเลยเท่านั้น — ห้องที่เหลือแต่ผู้ชมอยู่ต่อได้ (ADR-082 ข้อ 4)
+  // ห้องจากคิวไม่มีผู้ชม เงื่อนไขนี้จึงเท่ากับ "ผู้เล่นเหลือ 0" แบบเดิม
+  if (room.isEmpty) {
+    abortRoom(io, room, 'host_left', 'ไม่มีใครเหลืออยู่ในห้องแล้ว');
     return;
   }
   broadcastState(io, room);

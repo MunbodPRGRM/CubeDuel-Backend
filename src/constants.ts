@@ -124,6 +124,16 @@ export type CubeSkinId = (typeof CUBE_SKINS)[number];
 export const DEFAULT_CUBE_SKIN: CubeSkinId = 'classic';
 
 /**
+ * คีย์ปกข่าวที่ยอมให้เก็บลง `News.cover` (api-contract.md ข้อ 7 · ADR-084)
+ *
+ * **หน้าตาของปกอยู่ฝั่ง frontend** (`frontend/src/news/news-covers.ts`) — ที่นี่รู้แค่ว่าคีย์ไหนใช้ได้
+ * แบบเดียวกับ `CUBE_SKINS` · เพิ่มปกใหม่ต้องแก้ **สองที่พร้อมกัน** (ADR-021) · เก็บเป็น VARCHAR จึงไม่ต้อง migrate
+ */
+export const NEWS_COVERS = ['general', 'update', 'maintenance', 'penalty', 'event'] as const;
+export type NewsCoverId = (typeof NEWS_COVERS)[number];
+export const DEFAULT_NEWS_COVER: NewsCoverId = 'general';
+
+/**
  * งานเบื้องหลัง (เฟส 10 ก้อนที่ 1 — `src/jobs/`)
  *
  * `UNSUSPEND` ถี่กว่าเพราะกระทบสิ่งที่แอดมินมองเห็นทันที ส่วนการล้าง move log เป็นงานเก็บกวาด

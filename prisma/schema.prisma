@@ -332,7 +332,8 @@ model News {
   newsId    Int      @id @default(autoincrement()) @map("news_id")
   title     String   @db.VarChar(150)
   content   String   @db.Text
-  image     String?  @db.VarChar(255)
+  /// คีย์ปกที่เว็บวาดให้ (ADR-084) — รายการที่ใช้ได้อยู่ใน `NEWS_COVERS` (src/constants.ts)
+  cover     String   @default("general") @db.VarChar(20)
   authorId  Int      @map("author_id")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

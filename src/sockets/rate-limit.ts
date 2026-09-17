@@ -16,6 +16,8 @@ const LIMIT_PER_SECOND: Record<string, number> = {
   'queue:join': 3,
   // กดสลับพร้อม/ยกเลิกรัว ๆ = snapshot ไปทั้งห้องทุกครั้ง · นิ้วคนกดจริงไม่ถึงนี้ (ADR-078 ข้อ 4)
   'solve:inspection_ready': 5,
+  // สลับหนึ่งครั้ง = snapshot ทั้งห้อง + อ่าน Rating จาก DB (ทางไปเป็นผู้เล่น) (ADR-082 ข้อ 1)
+  'room:switch_seat': 5,
 };
 const DEFAULT_LIMIT_PER_SECOND = 20;
 

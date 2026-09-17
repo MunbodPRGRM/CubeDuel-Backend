@@ -11,6 +11,7 @@ import type {
   CubeType,
   PlayerProgress,
   PlayerPublic,
+  RoomHost,
   RoomKind,
   RoomMode,
   RoomSnapshot,
@@ -51,6 +52,23 @@ export interface RoomPlayer {
   moves: RecordedMove[];
   /** อันดับในรอบนี้ ได้ค่าตอนแก้เสร็จหรือตอนจบแมตช์ */
   rankNo: number | null;
+}
+
+/**
+ * ผู้ชมหนึ่งคน — เก็บชื่อไว้ด้วยเพราะหัวห้องนั่งเป็นผู้ชมได้ และ snapshot ต้องบอกชื่อหัวห้อง (ADR-082 ข้อ 3)
+ */
+export interface RoomSpectator {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** socket ทุกตัวของผู้ชมคนนี้ — ผู้ชมไม่มี grace ว่างเมื่อไหร่ถูกถอดออกทันที */
+  sockets: Set<string>;
+}
+
+/** key ตัวแรกของ Map (ลำดับที่ใส่) — `null` เมื่อว่าง */
+function firstKey<K>(map: ReadonlyMap<K, unknown>): K | null {
+  for (const key of map.keys()) return key;
+  return null;
 }
 
 /** ค่าเริ่มต้นของความคืบหน้า — ใช้ทั้งตอนเข้าห้องและตอนเริ่มรอบใหม่ในห้องเดิม (ADR-035 ข้อ 3) */
@@ -113,8 +131,8 @@ export class Room {
 
   /** เรียงตามลำดับที่เข้าห้อง (Map คงลำดับการใส่) */
   readonly players = new Map<number, RoomPlayer>();
-  /** userId ของผู้ชม → socket ของคนนั้น */
-  readonly spectators = new Map<number, Set<string>>();
+  /** userId ของผู้ชม → ผู้ชมคนนั้น (เรียงตามลำดับที่เข้ามาดู — ใช้หาหัวห้องคนใหม่ · ADR-082 ข้อ 3) */
+  readonly spectators = new Map<number, RoomSpectator>();
 
   #nextSeatNo = 1;
 
@@ -199,13 +217,17 @@ export class Room {
   }
 
   /**
-   * host ออกก่อนเริ่ม → โอนสิทธิ์ให้ผู้เล่นที่เข้ามาถัดไป (game-rules.md ข้อ 9)
-   * คืน `userId` ของ host คนใหม่ ถ้าไม่มีการเปลี่ยนคืน `null`
+   * host ออกจากห้อง → โอนสิทธิ์ (game-rules.md ข้อ 9 · ADR-082 ข้อ 3)
+   *
+   * สิทธิ์ **ผูกกับการอยู่ในห้อง ไม่ผูกกับที่นั่ง** — host ที่นั่งเป็นผู้ชมยังเป็น host
+   * หาคนใหม่: ผู้เล่นคนแรก → ผู้ชมคนแรก · คืน `userId` ของ host คนใหม่ ถ้าไม่มีการเปลี่ยนคืน `null`
    */
   reassignHostIfNeeded(): number | null {
-    if (this.hostUserId !== null && this.players.has(this.hostUserId)) return null;
-    const next = this.players.values().next();
-    this.hostUserId = next.done ? null : next.value.userId;
+    const current = this.hostUserId;
+    if (current !== null && (this.players.has(current) || this.spectators.has(current))) {
+      return null;
+    }
+    this.hostUserId = firstKey(this.players) ?? firstKey(this.spectators);
     return this.hostUserId;
   }
 
@@ -215,10 +237,13 @@ export class Room {
 
   // ---------------------------------------------------------------- ผู้ชม
 
-  addSpectatorSocket(userId: number, socketId: string): void {
-    const sockets = this.spectators.get(userId) ?? new Set<string>();
-    sockets.add(socketId);
-    this.spectators.set(userId, sockets);
+  addSpectatorSocket(
+    profile: Pick<RoomSpectator, 'userId' | 'username' | 'nickname'>,
+    socketId: string,
+  ): void {
+    const spectator = this.spectators.get(profile.userId) ?? { ...profile, sockets: new Set() };
+    spectator.sockets.add(socketId);
+    this.spectators.set(profile.userId, spectator);
     this.peakSpectatorCount = Math.max(this.peakSpectatorCount, this.spectators.size);
     this.touch();
   }
@@ -230,10 +255,10 @@ export class Room {
 
   /** คืน `true` ถ้าคนนี้ออกจากห้องผู้ชมจริง (socket หมดแล้ว) */
   removeSpectatorSocket(userId: number, socketId: string): boolean {
-    const sockets = this.spectators.get(userId);
-    if (!sockets) return false;
-    sockets.delete(socketId);
-    if (sockets.size > 0) return false;
+    const spectator = this.spectators.get(userId);
+    if (!spectator) return false;
+    spectator.sockets.delete(socketId);
+    if (spectator.sockets.size > 0) return false;
     this.spectators.delete(userId);
     this.touch();
     return true;
@@ -314,6 +339,30 @@ export class Room {
     };
   }
 
+  /** หัวห้องพร้อมชื่อและที่นั่ง — หัวห้องที่เป็นผู้ชมไม่อยู่ใน `players` (ADR-082 ข้อ 3) */
+  hostPublic(): RoomHost | null {
+    if (this.hostUserId === null) return null;
+    const player = this.players.get(this.hostUserId);
+    if (player) {
+      return {
+        userId: player.userId,
+        username: player.username,
+        nickname: player.nickname,
+        seat: 'player',
+      };
+    }
+    const spectator = this.spectators.get(this.hostUserId);
+    if (spectator) {
+      return {
+        userId: spectator.userId,
+        username: spectator.username,
+        nickname: spectator.nickname,
+        seat: 'spectator',
+      };
+    }
+    return null;
+  }
+
   snapshot(): RoomSnapshot {
     const players = [...this.players.values()];
     return {
@@ -342,6 +391,7 @@ export class Room {
             : null,
       // ค่าของทั้ง server ไม่ใช่ของห้อง — client ใช้ตัดสินว่าจะแสดงปุ่มทดสอบไหม (ADR-060 ข้อ 3)
       devInstantFinish: env.devInstantFinish,
+      host: this.hostPublic(),
     };
   }
 }

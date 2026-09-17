@@ -4,8 +4,10 @@
  * เก็บสามดัชนีคู่กันเสมอ ห้ามแก้อันใดอันหนึ่งโดยไม่แก้ที่เหลือ:
  *   roomId → Room · roomCode → Room · userId → ห้องที่คนนั้นอยู่ (คนละหนึ่งห้องเท่านั้น)
  */
-import type { CubeType, RoomKind, RoomMode } from './types.js';
+import type { CubeType, RoomKind, RoomMode, Seat } from './types.js';
 import { Room } from './room.js';
+
+export type { Seat };
 
 /** ไม่มีความเคลื่อนไหวเกินเท่านี้ = ยุบห้อง (game-rules.md ข้อ 9) */
 export const ROOM_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -14,8 +16,6 @@ export const ROOM_IDLE_TIMEOUT_MS = 30 * 60_000;
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 6;
 const ROOM_CODE_MAX_TRIES = 10;
-
-export type Seat = 'player' | 'spectator';
 
 interface Membership {
   roomId: number;

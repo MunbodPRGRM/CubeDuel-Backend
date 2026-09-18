@@ -9,10 +9,15 @@ import {
   type MatchHistoryQueryInput,
   type UserStatsQueryInput,
 } from '../schemas/stats.schema.js';
-import { updateProfileSchema, type UpdateProfileInput } from '../schemas/user.schema.js';
+import {
+  onlineUsersQuerySchema,
+  updateProfileSchema,
+  type OnlineUsersQueryInput,
+  type UpdateProfileInput,
+} from '../schemas/user.schema.js';
 import { getUserRatings } from '../services/leaderboard.service.js';
 import { getUserMatchHistory, getUserStats } from '../services/stats.service.js';
-import { getPublicProfile, updateOwnProfile } from '../services/user.service.js';
+import { getPublicProfile, listOnlineUsers, updateOwnProfile } from '../services/user.service.js';
 import { toSelfUser } from '../types/api.js';
 
 export const usersRouter = Router();
@@ -30,6 +35,20 @@ usersRouter.patch(
   asyncHandler(async (req, res) => {
     const input = req.body as UpdateProfileInput;
     res.json({ data: await updateOwnProfile(currentUser(req).userId, input) });
+  }),
+);
+
+/**
+ * สมาชิกที่ออนไลน์อยู่ตอนนี้ + กิจกรรม (api-contract.md ข้อ 3 · ADR-086)
+ * ต้องมาก่อน `/:userId` ไม่งั้น `online` ถูกจับเป็น `:userId` แล้วได้ 400
+ */
+usersRouter.get(
+  '/online',
+  requireAuth,
+  validateQuery(onlineUsersQuerySchema),
+  asyncHandler(async (req, res) => {
+    const q = queryOf<typeof onlineUsersQuerySchema>(req) as OnlineUsersQueryInput;
+    res.json({ data: await listOnlineUsers(q) });
   }),
 );
 

@@ -1,8 +1,17 @@
 import { UserStatus, type Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { errors } from '../lib/errors.js';
-import type { UpdateProfileInput } from '../schemas/user.schema.js';
-import { toPublicUser, toSelfUser, type PublicUserDto, type SelfUserDto } from '../types/api.js';
+import type { OnlineUsersQueryInput, UpdateProfileInput } from '../schemas/user.schema.js';
+import { ACTIVITY_ORDER, activityOf } from '../sockets/activity.js';
+import { onlineUserIds } from '../sockets/presence.js';
+import {
+  toPublicUser,
+  toSelfUser,
+  type OnlineUserDto,
+  type OnlineUsersDto,
+  type PublicUserDto,
+  type SelfUserDto,
+} from '../types/api.js';
 
 /**
  * โปรไฟล์สาธารณะของผู้ใช้คนหนึ่ง (api-contract.md ข้อ 3)
@@ -38,4 +47,43 @@ export async function updateOwnProfile(
 
   const updated = await prisma.user.update({ where: { userId }, data });
   return toSelfUser(updated);
+}
+
+/**
+ * สมาชิกที่ออนไลน์อยู่ตอนนี้ + กิจกรรม (api-contract.md ข้อ 3 · ADR-086 ข้อ 3)
+ *
+ * ใครออนไลน์ + ทำอะไรอยู่ มาจาก memory ของ Socket.IO · **ชื่อมาจาก DB** — ชื่อเล่นที่แก้หลังต่อ socket
+ * จะได้ไม่ค้าง และคัดบัญชีที่ถูกระงับ/ลบไปแล้วทิ้งได้ในคำสั่งเดียว
+ * จำนวนคนออนไลน์มีแค่ระดับร้อย (instance เดียว — ADR-034) `id in (...)` ครั้งเดียวจึงพอ ไม่ต้องแบ่งหน้า
+ */
+export async function listOnlineUsers(query: OnlineUsersQueryInput): Promise<OnlineUsersDto> {
+  const ids = [...onlineUserIds()];
+  if (ids.length === 0) return { online: 0, total: 0, users: [] };
+
+  const rows = await prisma.user.findMany({
+    where: {
+      userId: { in: ids },
+      deletedAt: null,
+      status: UserStatus.ACTIVE,
+      ...(query.q
+        ? {
+            OR: [
+              { username: { contains: query.q, mode: 'insensitive' } },
+              { nickname: { contains: query.q, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    },
+    select: { userId: true, username: true, nickname: true },
+  });
+
+  const users: OnlineUserDto[] = rows
+    .map((row) => ({ ...row, ...activityOf(row.userId) }))
+    .sort(
+      (a, b) =>
+        ACTIVITY_ORDER.indexOf(a.activity) - ACTIVITY_ORDER.indexOf(b.activity) ||
+        (a.nickname ?? a.username).localeCompare(b.nickname ?? b.username, 'th'),
+    );
+
+  return { online: ids.length, total: users.length, users: users.slice(0, query.limit) };
 }

@@ -105,21 +105,11 @@ export const OAUTH_STATE_TTL_MS = 10 * 60_000;
  * เพราะสีเป็นเรื่องของการแสดงผลล้วน ๆ server ไม่ได้ใช้ทำอะไรเลย (ADR-048 ข้อ 2)
  * เพิ่มสกินใหม่ต้องแก้ **สองที่พร้อมกัน** ที่นี่กับไฟล์นั้น (ADR-021) — `npm run verify:skins` ฝั่ง frontend
  * เทียบรายชื่อให้เมื่อมีโฟลเดอร์ `backend/` อยู่ข้าง ๆ (ADR-080 ข้อ 4) · ลำดับไม่มีผลกับ server
+ *
+ * **ADR-087 (เฟส 13 ก้อนที่ 25):** เหลือ `classic` + 4 สกินที่มีลวดลาย · รหัสเดิม 11 ตัวถูกลบ
+ * ค่าที่ค้างใน DB ย้ายกลับเป็น `classic` ด้วย migration `20260918000000_skin_patterns`
  */
-export const CUBE_SKINS = [
-  'classic',
-  'retro',
-  'midnight',
-  'neon',
-  'candy',
-  'sunset',
-  'pastel',
-  'sakura',
-  'ocean',
-  'forest',
-  'contrast',
-  'colorblind',
-] as const;
+export const CUBE_SKINS = ['classic', 'carbon', 'honeycomb', 'marble', 'brushed'] as const;
 export type CubeSkinId = (typeof CUBE_SKINS)[number];
 export const DEFAULT_CUBE_SKIN: CubeSkinId = 'classic';
 

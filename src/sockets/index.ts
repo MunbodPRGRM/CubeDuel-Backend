@@ -5,7 +5,7 @@ import { disposeLimiter, type TypedServer, type TypedSocket } from './ack.js';
 import { authMiddleware } from './auth.js';
 import { registerHandlers } from './handlers.js';
 import { beginDisconnectGrace } from './match.js';
-import { registerSocketServer } from './presence.js';
+import { registerSocketServer, schedulePresenceBroadcast, sendPresenceTo } from './presence.js';
 import { removeSocketFromQueue } from './queue.js';
 import { findExpiredRooms, ROOM_IDLE_TIMEOUT_MS } from './room-registry.js';
 import { abortRoom, leaveRoom } from './room-service.js';
@@ -34,7 +34,12 @@ export function createSocketServer(httpServer: HttpServer): TypedServer {
   io.on('connection', (socket) => {
     registerHandlers(io, socket);
 
+    // จำนวนสมาชิกออนไลน์ — คนนี้ได้ทันที คนอื่นได้ตอนรอบกระจายถัดไป (ADR-086 ข้อ 2)
+    sendPresenceTo(socket);
+    schedulePresenceBroadcast();
+
     socket.on('disconnect', () => {
+      schedulePresenceBroadcast();
       // อยู่ระหว่างรอคิว → ออกจากคิวทันที ไม่มี grace (game-rules.md ข้อ 6)
       removeSocketFromQueue(io, socket.id);
       // socket ตัวสุดท้ายของผู้เล่นหลุด → เริ่มนับ grace 30 วินาที (game-rules.md ข้อ 6)

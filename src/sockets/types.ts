@@ -408,6 +408,11 @@ export interface ServerToClientEvents {
    * client ต้องล้างเซสชันแล้วพาไปหน้าเข้าสู่ระบบ ไม่ต้องยิง `/auth/logout`
    */
   'session:revoked': (payload: { reason: 'signed_in_elsewhere' }) => void;
+  /**
+   * จำนวนสมาชิกออนไลน์ — ส่งทันทีตอนต่อ + กระจายเมื่อเปลี่ยน ไม่เกิน 1 ครั้งต่อ 5 วินาที (ADR-086)
+   * ข้อยกเว้นของ ADR-003 · รายชื่อไม่มาทางนี้ ใช้ `GET /users/online`
+   */
+  'presence:count': (payload: { online: number }) => void;
 
   error: (payload: AckError) => void;
 }

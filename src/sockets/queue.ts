@@ -203,6 +203,11 @@ export function removeSocketFromQueue(io: TypedServer, socketId: string): void {
   stopTickerIfIdle();
 }
 
+/** ประเภทรูบิคที่ผู้ใช้คนนี้กำลังรอจับคู่ (รวมช่วงรอกดยืนยัน) · ไม่อยู่ในคิว = `null` — ADR-086 ข้อ 3 */
+export function queuedCubeTypeOf(userId: number): CubeType | null {
+  return queue.get(userId)?.cubeType ?? null;
+}
+
 /** ไว้ดูตอน debug / เขียนเทส */
 export function queueSize(): number {
   return queue.size;

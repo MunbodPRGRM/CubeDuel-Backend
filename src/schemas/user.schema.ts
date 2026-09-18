@@ -30,7 +30,10 @@ export function normalizeBio(raw: string): string {
 const bioField = z
   .string()
   .transform(normalizeBio)
-  .refine((v) => v.length <= BIO_MAX_LENGTH, `ข้อความแนะนำตัวต้องยาวไม่เกิน ${BIO_MAX_LENGTH} ตัวอักษร`)
+  .refine(
+    (v) => v.length <= BIO_MAX_LENGTH,
+    `ข้อความแนะนำตัวต้องยาวไม่เกิน ${BIO_MAX_LENGTH} ตัวอักษร`,
+  )
   .refine(
     (v) => v.split('\n').length <= BIO_MAX_LINES,
     `ข้อความแนะนำตัวต้องไม่เกิน ${BIO_MAX_LINES} บรรทัด`,
@@ -67,3 +70,20 @@ export const updateProfileSchema = z
   .refine((v) => Object.keys(v).length > 0, 'ไม่มีอะไรให้แก้');
 
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+/** รายชื่อสมาชิกออนไลน์ยาวได้สูงสุดเท่านี้ต่อครั้ง — ไม่มีหน้าที่ 2 (ADR-086 ข้อ 3) */
+export const ONLINE_USERS_MAX_LIMIT = 50;
+
+/** กฎ validation ของ `GET /users/online` (api-contract.md ข้อ 3) */
+export const onlineUsersQuerySchema = z.object({
+  /** ช่องว่างล้วน = ไม่ค้น */
+  q: z
+    .string()
+    .trim()
+    .max(50, 'คำค้นหาต้องยาวไม่เกิน 50 ตัวอักษร')
+    .transform((v) => (v.length === 0 ? undefined : v))
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(ONLINE_USERS_MAX_LIMIT).default(ONLINE_USERS_MAX_LIMIT),
+});
+
+export type OnlineUsersQueryInput = z.infer<typeof onlineUsersQuerySchema>;

@@ -3,6 +3,8 @@
  * DB เป็น snake_case + enum ตัวพิมพ์ใหญ่ → แปลงที่ชั้นนี้ที่เดียวเท่านั้น (api-contract.md ข้อ 11)
  */
 import type { User, UserRole, UserStatus } from '@prisma/client';
+import type { OnlineActivity } from '../sockets/activity.js';
+import type { CubeType } from './cube.js';
 
 export type ApiUserRole = 'member' | 'admin';
 export type ApiUserStatus = 'active' | 'suspended';
@@ -69,4 +71,21 @@ export interface AuthSessionDto {
   user: SelfUserDto;
   accessToken: string;
   refreshToken: string;
+}
+
+/** หนึ่งแถวของ `GET /users/online` — ไม่มี `roomCode` โดยตั้งใจ (ADR-086 ข้อ 3) */
+export interface OnlineUserDto {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  activity: OnlineActivity;
+  cubeType: CubeType | null;
+}
+
+export interface OnlineUsersDto {
+  /** สมาชิกออนไลน์ทั้งหมด — ตัวเลขเดียวกับ `presence:count` */
+  online: number;
+  /** คนที่ตรงกับ `q` ก่อนตัดที่ `limit` */
+  total: number;
+  users: OnlineUserDto[];
 }

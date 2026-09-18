@@ -50,10 +50,10 @@ async function main(): Promise<void> {
   console.log(`\nบัญชีทดสอบ: ${before.username} (#${userId}) · สกินเดิม ${before.cubeSkin}\n`);
 
   console.log('1) แก้ชื่อเล่นกับสกินพร้อมกัน');
-  const renamed = await patchProfile(token, { nickname: '  สมชาย  ', cubeSkin: 'neon' });
+  const renamed = await patchProfile(token, { nickname: '  สมชาย  ', cubeSkin: 'carbon' });
   check('ตอบ 200', renamed.status === 200, renamed);
   check('ชื่อเล่นถูก trim ก่อนบันทึก', renamed.data?.nickname === 'สมชาย', renamed.data?.nickname);
-  check('สกินเปลี่ยนเป็น neon', renamed.data?.cubeSkin === 'neon', renamed.data?.cubeSkin);
+  check('สกินเปลี่ยนเป็น carbon', renamed.data?.cubeSkin === 'carbon', renamed.data?.cubeSkin);
   check('ยังคืน email ของเจ้าของบัญชี', typeof renamed.data?.email === 'string');
 
   console.log('\n2) โปรไฟล์สาธารณะเห็นชื่อใหม่ และยังไม่มี email');
@@ -63,18 +63,23 @@ async function main(): Promise<void> {
   check('ไม่มี cubeSkin หลุดออกไป', !('cubeSkin' in publicProfile));
 
   console.log('\n3) ส่งมาช่องเดียวต้องไม่ล้างอีกช่อง');
-  const skinOnly = await patchProfile(token, { cubeSkin: 'pastel' });
-  check('สกินเปลี่ยน', skinOnly.data?.cubeSkin === 'pastel', skinOnly.data?.cubeSkin);
+  const skinOnly = await patchProfile(token, { cubeSkin: 'marble' });
+  check('สกินเปลี่ยน', skinOnly.data?.cubeSkin === 'marble', skinOnly.data?.cubeSkin);
   check('ชื่อเล่นยังอยู่ครบ', skinOnly.data?.nickname === 'สมชาย', skinOnly.data?.nickname);
 
-  // สกินชุดที่เพิ่มในเฟส 13 ก้อนที่ 11 (ADR-080) — ตัวแรกและตัวสุดท้ายของรายการ
-  for (const skin of ['retro', 'colorblind']) {
+  // สกินลวดลายชุดเฟส 13 ก้อนที่ 25 (ADR-087) — ตัวที่ยังไม่ได้ลองข้างบน
+  for (const skin of ['honeycomb', 'brushed']) {
     const added = await patchProfile(token, { cubeSkin: skin });
     check(
-      `สกินใหม่ ${skin} บันทึกได้ (ADR-080)`,
+      `สกิน ${skin} บันทึกได้ (ADR-087)`,
       added.status === 200 && added.data?.cubeSkin === skin,
       added,
     );
+  }
+  // รหัสที่ถูกลบในก้อนที่ 25 ต้องใช้ไม่ได้แล้ว — ตัวที่เคยเป็นค่าตั้งต้นของสโมคนี้เอง
+  for (const skin of ['neon', 'pastel', 'colorblind']) {
+    const removed = await patchProfile(token, { cubeSkin: skin });
+    check(`สกินที่ถูกลบ ${skin} → 400 (ADR-087)`, removed.status === 400, removed);
   }
 
   console.log('\n4) ค่าที่ไม่ผ่านกติกา');
@@ -97,7 +102,7 @@ async function main(): Promise<void> {
   const anon = await fetch(`${API}/users/me`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ cubeSkin: 'neon' }),
+    body: JSON.stringify({ cubeSkin: 'carbon' }),
   });
   check('ไม่ล็อกอิน → 401', anon.status === 401, anon.status);
 

@@ -263,7 +263,11 @@ async function main(): Promise<void> {
     token: admin.token,
     body: { status: 'suspended' },
   });
-  check('ระงับบัญชีตัวเอง → 400', selfSuspend.status === 400, selfSuspend);
+  check(
+    'ระงับบัญชีตัวเอง → 403',
+    selfSuspend.status === 403 && selfSuspend.error?.code === 'E_FORBIDDEN',
+    selfSuspend,
+  );
 
   const suspended = await api(`/admin/users/${target.userId}/status`, {
     method: 'PATCH',
@@ -358,7 +362,7 @@ async function main(): Promise<void> {
   const pending = await api('/admin/reports?status=pending', { token: admin.token });
   const pendingRows = pending.data as Array<{
     reportId: number;
-    reported: { reportCount: number };
+    reported: { reportCount: number; role?: string };
   }>;
   check(
     'รายงานที่เพิ่งแจ้งอยู่ในรายการ pending',
@@ -368,6 +372,11 @@ async function main(): Promise<void> {
   check(
     'รายการบอกจำนวนครั้งที่ผู้ถูกรายงานเคยถูกแจ้ง',
     (pendingRows?.find((r) => r.reportId === report.reportId)?.reported.reportCount ?? 0) >= 1,
+  );
+  check(
+    'รายการบอก role ของผู้ถูกรายงาน (ADR-075 ข้อ 3)',
+    pendingRows?.find((r) => r.reportId === report.reportId)?.reported.role === 'member',
+    pendingRows?.find((r) => r.reportId === report.reportId)?.reported,
   );
 
   const resolved = await api(`/admin/reports/${report.reportId}`, {
@@ -400,6 +409,105 @@ async function main(): Promise<void> {
     body: { action: 'ban_forever' },
   });
   check('ผลการตัดสินนอกรายการ → 400', badAction.status === 400, badAction);
+
+  // ---------------------------------------------------------------- กันแอดมินลงโทษแอดมิน
+
+  /**
+   * ADR-075 — ① ตัดสินคดีที่ตัวเองถูกรายงานไม่ได้ · ② ลงโทษบัญชีแอดมินไม่ได้ · ③ ระงับบัญชีแอดมินไม่ได้
+   *
+   * ต้นตอของบั๊กคือ "ระงับตัวเองผ่านระบบรายงาน" ซึ่ง `PATCH /admin/users/:id/status` กันไว้แต่รายงานไม่ได้กัน
+   * เทสนี้เลยยิงทั้งสองประตู · ใช้ `somchai` เป็นแอดมินชั่วคราวแล้วคืนสิทธิ์ตอนจบ
+   */
+  console.log('\n7ก) แอดมินลงโทษแอดมิน/ตัดสินคดีตัวเองไม่ได้ (ADR-075)');
+
+  const aboutAdmin = await prisma.report.create({
+    data: {
+      reporterId: target.userId,
+      reportedId: admin.userId,
+      reason: 'สโมคเทส — รายงานที่ผู้ถูกรายงานคือแอดมินที่กำลังตัดสิน',
+    },
+  });
+  for (const action of ['none', 'warning', 'suspend'] as const) {
+    const judged = await api(`/admin/reports/${aboutAdmin.reportId}`, {
+      method: 'PATCH',
+      token: admin.token,
+      body: { action },
+    });
+    check(
+      `ตัดสินรายงานที่ตัวเองถูกรายงาน (${action}) → 403`,
+      judged.status === 403 && judged.error?.code === 'E_FORBIDDEN',
+      judged,
+    );
+  }
+  const stillPending = await prisma.report.findUnique({
+    where: { reportId: aboutAdmin.reportId },
+  });
+  check('รายงานนั้นยังค้างอยู่ ไม่ถูกปิดไปเงียบ ๆ', stillPending?.reportStatus === 'PENDING');
+  const adminStillActive = await prisma.user.findUnique({ where: { userId: admin.userId } });
+  check('บัญชีแอดมินยังไม่ถูกระงับ', adminStillActive?.status === 'ACTIVE');
+
+  // เลื่อน somchai เป็นแอดมินชั่วคราว เพื่อทดสอบ "แอดมินคนหนึ่งลงโทษแอดมินอีกคน"
+  await prisma.user.update({ where: { userId: reporter.userId }, data: { role: 'ADMIN' } });
+  const aboutOtherAdmin = await prisma.report.create({
+    data: {
+      reporterId: target.userId,
+      reportedId: reporter.userId,
+      reason: 'สโมคเทส — รายงานที่ผู้ถูกรายงานเป็นแอดมินอีกคน',
+    },
+  });
+  try {
+    const listed = await api('/admin/reports?status=pending', { token: admin.token });
+    const listedRows = listed.data as Array<{ reportId: number; reported: { role?: string } }>;
+    check(
+      'รายการบอกว่าผู้ถูกรายงานเป็นแอดมิน',
+      listedRows?.find((r) => r.reportId === aboutOtherAdmin.reportId)?.reported.role === 'admin',
+      listedRows?.find((r) => r.reportId === aboutOtherAdmin.reportId)?.reported,
+    );
+
+    for (const action of ['suspend', 'reset_rating'] as const) {
+      const punish = await api(`/admin/reports/${aboutOtherAdmin.reportId}`, {
+        method: 'PATCH',
+        token: admin.token,
+        body: { action },
+      });
+      check(
+        `ลงโทษ (${action}) บัญชีแอดมินผ่านรายงาน → 403`,
+        punish.status === 403 && punish.error?.code === 'E_FORBIDDEN',
+        punish,
+      );
+    }
+
+    const suspendOtherAdmin = await api(`/admin/users/${reporter.userId}/status`, {
+      method: 'PATCH',
+      token: admin.token,
+      body: { status: 'suspended' },
+    });
+    check(
+      'ระงับบัญชีแอดมินอีกคนตรง ๆ → 403',
+      suspendOtherAdmin.status === 403 && suspendOtherAdmin.error?.code === 'E_FORBIDDEN',
+      suspendOtherAdmin,
+    );
+
+    // ปิดเรื่องยังทำได้ — ไม่งั้นรายงานที่ร้องเรียนแอดมินจะค้างคิวตลอดไป
+    const closed = await api(`/admin/reports/${aboutOtherAdmin.reportId}`, {
+      method: 'PATCH',
+      token: admin.token,
+      body: { action: 'warning', adminNote: 'สโมคเทส — ปิดเรื่องแบบไม่ลงโทษ' },
+    });
+    check(
+      'ปิดเรื่องด้วย warning ยังทำได้ → 200',
+      closed.status === 200 && (closed.data as { actionTaken?: string })?.actionTaken === 'warning',
+      closed,
+    );
+    const otherAdminUser = await prisma.user.findUnique({ where: { userId: reporter.userId } });
+    check('แอดมินอีกคนยังไม่ถูกระงับ', otherAdminUser?.status === 'ACTIVE', otherAdminUser?.status);
+  } finally {
+    // คืนสิทธิ์ + เก็บกวาดรายงานที่สร้างเองเสมอ แม้เทสข้างบนจะพัง
+    await prisma.user.update({ where: { userId: reporter.userId }, data: { role: 'MEMBER' } });
+    await prisma.report.deleteMany({
+      where: { reportId: { in: [aboutAdmin.reportId, aboutOtherAdmin.reportId] } },
+    });
+  }
 
   // ---------------------------------------------------------------- แมตช์ที่ถูก flag
 

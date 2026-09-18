@@ -14,7 +14,7 @@
  *   2. ด่านสิทธิ์ของทุก endpoint × ไม่มี token / token ปลอม 9 แบบ / สมาชิก / แอดมิน
  *   3. ข้อมูลส่วนตัวไม่หลุดทาง endpoint สาธารณะ · บัญชีที่ถูกลบถือว่าไม่มีอยู่
  *   4. input ประสงค์ร้าย — SQL injection · id เกิน INT4 · JSON พัง · body ใหญ่เกิน · object แทน string
- *   5. header · CORS · path traversal ของ `/uploads`
+ *   5. header · CORS · path traversal ด้วยพาธดิบ
  *   6. socket — handshake ปลอม · ผู้ชมส่งคำสั่งผู้เล่น · คนที่ไม่ใช่ host กดเริ่ม · userId ใน payload ไม่มีผล · rate limit
  *
  * **ไม่เปลี่ยนข้อมูลจริง** — request ที่ผ่านด่านไปได้ส่ง body ว่าง/id ที่ไม่มีอยู่ ให้ไปตกที่ validation
@@ -603,7 +603,7 @@ async function main(): Promise<number> {
       reflected.headers.get('content-type'),
     );
 
-    console.log('\n── 5. header · CORS · /uploads');
+    console.log('\n── 5. header · CORS');
     const health = await call('GET', '/health', { headers: { origin: 'https://evil.example' } });
     check('ไม่ประกาศว่าเป็น Express (ไม่มี X-Powered-By)', !health.headers.has('x-powered-by'));
     check('X-Content-Type-Options: nosniff', health.headers.get('x-content-type-options') === 'nosniff');
@@ -616,7 +616,8 @@ async function main(): Promise<number> {
     const allowed = await call('GET', '/health', { headers: { origin: env.corsOrigin } });
     check(`CORS อนุญาตเฉพาะ ${env.corsOrigin}`, allowed.headers.get('access-control-allow-origin') === env.corsOrigin);
 
-    for (const raw of ['/uploads/../.env', '/uploads/%2e%2e/.env', '/uploads/news/..%2f..%2f.env', '/uploads/..%5c.env', '/uploads/']) {
+    // ไม่มี `/uploads` แล้ว (ADR-084) — ยังยิงพาธดิบไว้ เผื่อวันหน้ามีใครเพิ่ม static กลับมา
+    for (const raw of ['/../.env', '/%2e%2e/.env', '/api/v1/..%2f..%2f.env', '/uploads/news/', '/..%5c.env']) {
       const res = await rawGet(raw);
       check(`path traversal ${raw} ไม่ได้อะไรกลับไป (${res.status})`, res.status !== 200 && !res.text.includes('JWT_'));
     }

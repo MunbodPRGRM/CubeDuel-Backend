@@ -77,6 +77,16 @@ export const roomReadySchema = z.object({
   ready: z.boolean(),
 });
 
+/** `room:switch_seat` — ที่นั่งปลายทางในห้องเดิม (ADR-082) */
+export const roomSwitchSeatSchema = z.object({
+  to: z.enum(['player', 'spectator']),
+});
+
+/** `solve:inspection_ready` — กด/ยกเลิก "พร้อม" ช่วง inspection (ADR-078) · แยกจาก `room:ready` ของล็อบบี้ */
+export const solveInspectionReadySchema = z.object({
+  ready: z.boolean(),
+});
+
 export const solveMoveSchema = z.object({
   seq: z.number().int().positive(),
   // notation ตัวเดียวเท่านั้น — ห้ามส่งหลาย move รวมใน string เดียว (socket-events.md ข้อ 7)

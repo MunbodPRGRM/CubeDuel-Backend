@@ -40,7 +40,13 @@ export interface PlayerPublic {
   /** Elo ของ cube_type ที่กำลังแข่ง (ไม่ใช่ค่ารวม — Rating แยก 4 แถวต่อคน) */
   eloRating: number;
   isHost: boolean;
+  /** ป้ายพร้อมในล็อบบี้ห้องสร้างเอง (`room:ready`) — ใช้ตอน `WAITING` เท่านั้น */
   isReady: boolean;
+  /**
+   * กด "พร้อม" ช่วง `INSPECTION` แล้ว (`solve:inspection_ready`) — **คนละช่องกับ `isReady`** · ล้างทุกรอบ
+   * ผู้เล่นทุกคนเป็น `true` = ห้องล็อกแล้ว กำลังจะเริ่ม (ADR-078 ข้อ 4)
+   */
+  inspectionReady: boolean;
   connected: boolean;
 }
 
@@ -84,6 +90,20 @@ export interface RoomSnapshot {
   matchKind: MatchKind | null;
   /** server นี้รับ `solve:dev_finish` ไหม — ปุ่มทดสอบ (ADR-060) · ⚠️ ถอดออกก่อน deploy */
   devInstantFinish: boolean;
+  /**
+   * หัวห้อง — **นั่งเป็นผู้ชมได้ จึงอาจไม่อยู่ใน `players`** (ADR-082 ข้อ 3)
+   * ห้องจากคิวมีค่าแต่ไม่มีความหมาย เหมือน `PlayerPublic.isHost` ของห้องพวกนั้น
+   */
+  host: RoomHost | null;
+}
+
+export type Seat = 'player' | 'spectator';
+
+export interface RoomHost {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  seat: Seat;
 }
 
 /**
@@ -135,6 +155,37 @@ export interface QueueLeaveResult {
   /** false = ไม่ได้อยู่ในคิวอยู่แล้ว (ไม่ถือว่าผิดพลาด) */
   left: boolean;
 }
+
+/**
+ * คนอื่นในกลุ่มที่รอยืนยัน — **ยังไม่มีห้อง** จึงไม่มี `isHost` / `isReady` / `connected`
+ * เหมือน `PlayerPublic` (ADR-077 ข้อ 3)
+ */
+export interface QueueRival {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** Elo ของ cubeType ที่กำลังจะแข่ง */
+  eloRating: number;
+}
+export interface QueueMatchFoundPayload {
+  kind: QueueKind;
+  cubeType: CubeType;
+  /** **ไม่รวมตัวเอง** — 1 คนสำหรับคิว 1v1 · 2–3 คนสำหรับคิวหลายคน */
+  rivals: QueueRival[];
+  /** จำนวนคนทั้งกลุ่ม **รวมตัวเอง** */
+  groupSize: number;
+  /** กดยอมรับไปแล้วกี่คน (รวมตัวเอง) — ใช้โชว์ "2/4" ในห้องหลายคน */
+  acceptedCount: number;
+  /** เรากดยอมรับไปแล้วหรือยัง — payload เป็นสถานะทั้งใบ ไม่ใช่ delta (ADR-077 ข้อ 6) */
+  youAccepted: boolean;
+  /** เวลาของนาฬิกา server ที่หมดเวลายืนยัน — **ไม่ส่งเป็นจำนวนวินาที** */
+  expiresAtTs: number;
+}
+export interface QueueAcceptResult {
+  /** = `acceptedCount` หลังนับครั้งนี้แล้ว */
+  accepted: number;
+  groupSize: number;
+}
 export interface QueueStatusPayload {
   /** ช่องคิวที่กำลังรออยู่ — client เดาเองไม่ได้เพราะ server พาเข้าคิวเองได้ (ADR-044 ข้อ 2) */
   kind: QueueKind;
@@ -154,7 +205,14 @@ export interface QueueMatchedPayload {
   players: PlayerPublic[];
 }
 export interface QueueTimeoutPayload {
+  /** รออยู่ในคิวมาทั้งหมดกี่ ms (ไม่ใช่ 12 วินาทีของช่วงยืนยัน) */
   waitedMs: number;
+  /**
+   * หมดเวลาตัวไหน — ทั้งสองแบบแปลว่า **ออกจากคิวไปแล้ว** เหมือนกัน (ADR-077 ข้อ 6)
+   *   - `no_match` = รอครบ 180 วินาทีแล้วไม่เจอใคร (game-rules.md ข้อ 8)
+   *   - `ready_check` = เจอคู่แล้วแต่ไม่กดยืนยันภายใน 12 วินาที
+   */
+  reason: 'no_match' | 'ready_check';
 }
 
 export interface RoomCreatePayload {
@@ -183,6 +241,11 @@ export interface RoomReadyPayload {
   ready: boolean;
 }
 
+/** `room:switch_seat` — สลับที่นั่งของตัวเองในห้องเดิม (ADR-082) · ack เป็น `RoomSnapshotResult` */
+export interface RoomSwitchSeatPayload {
+  to: Seat;
+}
+
 export type LeaveReason = 'left' | 'disconnected' | 'kicked';
 export type AbortReason = 'player_left' | 'timeout' | 'host_left';
 
@@ -198,6 +261,16 @@ export interface SolveSolvedPayload {
   seq: number;
   moveCount: number;
   clientTs: number;
+}
+
+export interface SolveInspectionReadyPayload {
+  ready: boolean;
+}
+
+/** ตัวเลขหลังรับคำสั่ง — ความจริงยังเป็น `room:state` ที่ตามมา (ADR-078) */
+export interface SolveInspectionReadyResult {
+  readyCount: number;
+  playerCount: number;
 }
 
 export interface SolveSolvedResult {
@@ -255,13 +328,24 @@ export interface ClientToServerEvents {
   'net:ping': (payload: NetPingPayload, ack?: AckFn<NetPingResult>) => void;
   'queue:join': (payload: QueueJoinPayload, ack?: AckFn<QueueJoinResult>) => void;
   'queue:leave': (payload: Record<string, never>, ack?: AckFn<QueueLeaveResult>) => void;
+  /** ยืนยันว่าจะเล่นกลุ่มที่เจอ — กดซ้ำไม่ใช่ error (ADR-077) */
+  'queue:accept': (payload: Record<string, never>, ack?: AckFn<QueueAcceptResult>) => void;
+  /** ปฏิเสธกลุ่มที่เจอ → ออกจากคิว มีผลเท่ากับ `queue:leave` (ADR-077) */
+  'queue:decline': (payload: Record<string, never>, ack?: AckFn<QueueLeaveResult>) => void;
   'room:create': (payload: RoomCreatePayload, ack?: AckFn<RoomCreateResult>) => void;
   'room:join': (payload: RoomJoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'room:rejoin': (payload: RoomRejoinPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'room:leave': (payload: Record<string, never>, ack?: AckFn<null>) => void;
   'room:ready': (payload: RoomReadyPayload, ack?: AckFn<null>) => void;
   'room:start': (payload: Record<string, never>, ack?: AckFn<null>) => void;
+  /** สลับผู้เล่น ↔ ผู้ชม เฉพาะ WAITING / FINISHED ของห้องที่มีรหัส — ที่นั่งเดิมตอบ snapshot เฉย ๆ (ADR-082) */
+  'room:switch_seat': (payload: RoomSwitchSeatPayload, ack?: AckFn<RoomSnapshotResult>) => void;
   'solve:ready': (payload: Record<string, never>, ack?: AckFn<null>) => void;
+  /** กด/ยกเลิก "พร้อม" ช่วง inspection — ห้ามสับสนกับ `solve:ready` ของช่วง LOADING (ADR-078) */
+  'solve:inspection_ready': (
+    payload: SolveInspectionReadyPayload,
+    ack?: AckFn<SolveInspectionReadyResult>,
+  ) => void;
   /** ไม่มี ack เพื่อความลื่น — server เงียบถ้าผ่าน ผิดเมื่อไรส่ง event `error` */
   'solve:move': (payload: SolveMovePayload) => void;
   'solve:solved': (payload: SolveSolvedPayload, ack?: AckFn<SolveSolvedResult>) => void;
@@ -274,6 +358,8 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   'queue:status': (payload: QueueStatusPayload) => void;
+  /** เจอกลุ่มแล้ว **ยังไม่มีห้อง** — ส่งซ้ำทุกครั้งที่มีคนกดยอมรับ (ADR-077) */
+  'queue:match_found': (payload: QueueMatchFoundPayload) => void;
   'queue:matched': (payload: QueueMatchedPayload) => void;
   'queue:timeout': (payload: QueueTimeoutPayload) => void;
 
@@ -288,6 +374,8 @@ export interface ServerToClientEvents {
   'match:loading': (payload: { scramble: string; cubeType: CubeType; deadlineTs: number }) => void;
   'match:countdown': (payload: { startsAtTs: number; durationMs: number }) => void;
   'match:inspection_started': (payload: { endsAtTs: number; durationMs: number }) => void;
+  /** พร้อมครบทุกคน → inspection จบที่เวลาใหม่ (ตอนนั้น + 3 วินาที) · ยังเป็น INSPECTION จนถึงเวลานั้น (ADR-078) */
+  'match:inspection_shortened': (payload: { endsAtTs: number }) => void;
   'match:started': (payload: { serverStartTs: number }) => void;
   'match:final_countdown': (payload: {
     firstSolverUserId: number;
@@ -311,8 +399,20 @@ export interface ServerToClientEvents {
     rankNo: number;
   }) => void;
   'player:dnf': (payload: { userId: number; reason: DnfReason }) => void;
+  'player:inspection_ready': (payload: { userId: number; ready: boolean }) => void;
   'player:disconnected': (payload: { userId: number; graceEndsAtTs: number }) => void;
   'player:reconnected': (payload: { userId: number }) => void;
+
+  /**
+   * บัญชีนี้ถูกเข้าสู่ระบบจากที่อื่น — สายนี้กำลังจะถูกตัด (ADR-076 · socket-events.md ข้อ 2)
+   * client ต้องล้างเซสชันแล้วพาไปหน้าเข้าสู่ระบบ ไม่ต้องยิง `/auth/logout`
+   */
+  'session:revoked': (payload: { reason: 'signed_in_elsewhere' }) => void;
+  /**
+   * จำนวนสมาชิกออนไลน์ — ส่งทันทีตอนต่อ + กระจายเมื่อเปลี่ยน ไม่เกิน 1 ครั้งต่อ 5 วินาที (ADR-086)
+   * ข้อยกเว้นของ ADR-003 · รายชื่อไม่มาทางนี้ ใช้ `GET /users/online`
+   */
+  'presence:count': (payload: { online: number }) => void;
 
   error: (payload: AckError) => void;
 }
@@ -328,7 +428,7 @@ export interface SocketData {
   /** ห้องที่ socket นี้อยู่ (`null` = ยังไม่ได้เข้าห้องไหน) */
   roomId: number | null;
   /** เข้ามาในฐานะอะไร — ผู้ชมส่ง `solve:*` ไม่ได้ */
-  seat: 'player' | 'spectator' | null;
+  seat: Seat | null;
 }
 
 /** ชื่อ Socket.IO room ของผู้เล่น กับของผู้ชม (แยกกันเพื่อ broadcast คนละชุด) */

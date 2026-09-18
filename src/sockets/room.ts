@@ -11,6 +11,7 @@ import type {
   CubeType,
   PlayerProgress,
   PlayerPublic,
+  RoomHost,
   RoomKind,
   RoomMode,
   RoomSnapshot,
@@ -45,22 +46,42 @@ export interface RoomPlayer {
   solveTimeMs: number | null;
   /** แจ้ง `solve:ready` แล้วหรือยัง (ช่วง LOADING) */
   loaded: boolean;
+  /** กด "พร้อม" ช่วง INSPECTION แล้วหรือยัง — คนละเรื่องกับ `isReady` ของล็อบบี้ (ADR-078) */
+  inspectionReady: boolean;
   /** move stream ของรอบนี้ — ใช้ replay ตอน `solve:solved` และคัดลง`MatchFlag` ถ้าเข้าเกณฑ์ soft */
   moves: RecordedMove[];
   /** อันดับในรอบนี้ ได้ค่าตอนแก้เสร็จหรือตอนจบแมตช์ */
   rankNo: number | null;
 }
 
+/**
+ * ผู้ชมหนึ่งคน — เก็บชื่อไว้ด้วยเพราะหัวห้องนั่งเป็นผู้ชมได้ และ snapshot ต้องบอกชื่อหัวห้อง (ADR-082 ข้อ 3)
+ */
+export interface RoomSpectator {
+  userId: number;
+  username: string;
+  nickname: string | null;
+  /** socket ทุกตัวของผู้ชมคนนี้ — ผู้ชมไม่มี grace ว่างเมื่อไหร่ถูกถอดออกทันที */
+  sockets: Set<string>;
+}
+
+/** key ตัวแรกของ Map (ลำดับที่ใส่) — `null` เมื่อว่าง */
+function firstKey<K>(map: ReadonlyMap<K, unknown>): K | null {
+  for (const key of map.keys()) return key;
+  return null;
+}
+
 /** ค่าเริ่มต้นของความคืบหน้า — ใช้ทั้งตอนเข้าห้องและตอนเริ่มรอบใหม่ในห้องเดิม (ADR-035 ข้อ 3) */
 function freshProgress(): Pick<
   RoomPlayer,
-  'moveCount' | 'status' | 'solveTimeMs' | 'loaded' | 'moves' | 'rankNo'
+  'moveCount' | 'status' | 'solveTimeMs' | 'loaded' | 'inspectionReady' | 'moves' | 'rankNo'
 > {
   return {
     moveCount: 0,
     status: 'solving',
     solveTimeMs: null,
     loaded: false,
+    inspectionReady: false,
     moves: [],
     rankNo: null,
   };
@@ -91,7 +112,10 @@ export class Room {
   hostUserId: number | null = null;
   /** ไว้ให้สวีปเปอร์ยุบห้องร้าง — ทุก handler ที่แตะห้องต้องเรียก `touch()` */
   lastActivityTs = Date.now();
-  /** จำนวนผู้ชมสูงสุดที่เคยมี — บันทึกลง `Match.spectator_count` ตอนจบ */
+  /**
+   * จำนวนผู้ชมสูงสุดของ **รอบนี้** — บันทึกลง `Match.spectator_count` / `MultiplayerMatch.spectator_count`
+   * ตอนจบ · เริ่มรอบใหม่นับจากคนที่ดูอยู่ตอนนั้น (`resetForNewRound` — ADR-079 ข้อ 3)
+   */
   peakSpectatorCount = 0;
   /**
    * `match_id` ของรอบล่าสุดที่บันทึกสำเร็จ — ส่งไปกับ snapshot เพื่อให้ client ที่พลาด
@@ -107,8 +131,8 @@ export class Room {
 
   /** เรียงตามลำดับที่เข้าห้อง (Map คงลำดับการใส่) */
   readonly players = new Map<number, RoomPlayer>();
-  /** userId ของผู้ชม → socket ของคนนั้น */
-  readonly spectators = new Map<number, Set<string>>();
+  /** userId ของผู้ชม → ผู้ชมคนนั้น (เรียงตามลำดับที่เข้ามาดู — ใช้หาหัวห้องคนใหม่ · ADR-082 ข้อ 3) */
+  readonly spectators = new Map<number, RoomSpectator>();
 
   #nextSeatNo = 1;
 
@@ -193,13 +217,17 @@ export class Room {
   }
 
   /**
-   * host ออกก่อนเริ่ม → โอนสิทธิ์ให้ผู้เล่นที่เข้ามาถัดไป (game-rules.md ข้อ 9)
-   * คืน `userId` ของ host คนใหม่ ถ้าไม่มีการเปลี่ยนคืน `null`
+   * host ออกจากห้อง → โอนสิทธิ์ (game-rules.md ข้อ 9 · ADR-082 ข้อ 3)
+   *
+   * สิทธิ์ **ผูกกับการอยู่ในห้อง ไม่ผูกกับที่นั่ง** — host ที่นั่งเป็นผู้ชมยังเป็น host
+   * หาคนใหม่: ผู้เล่นคนแรก → ผู้ชมคนแรก · คืน `userId` ของ host คนใหม่ ถ้าไม่มีการเปลี่ยนคืน `null`
    */
   reassignHostIfNeeded(): number | null {
-    if (this.hostUserId !== null && this.players.has(this.hostUserId)) return null;
-    const next = this.players.values().next();
-    this.hostUserId = next.done ? null : next.value.userId;
+    const current = this.hostUserId;
+    if (current !== null && (this.players.has(current) || this.spectators.has(current))) {
+      return null;
+    }
+    this.hostUserId = firstKey(this.players) ?? firstKey(this.spectators);
     return this.hostUserId;
   }
 
@@ -209,10 +237,13 @@ export class Room {
 
   // ---------------------------------------------------------------- ผู้ชม
 
-  addSpectatorSocket(userId: number, socketId: string): void {
-    const sockets = this.spectators.get(userId) ?? new Set<string>();
-    sockets.add(socketId);
-    this.spectators.set(userId, sockets);
+  addSpectatorSocket(
+    profile: Pick<RoomSpectator, 'userId' | 'username' | 'nickname'>,
+    socketId: string,
+  ): void {
+    const spectator = this.spectators.get(profile.userId) ?? { ...profile, sockets: new Set() };
+    spectator.sockets.add(socketId);
+    this.spectators.set(profile.userId, spectator);
     this.peakSpectatorCount = Math.max(this.peakSpectatorCount, this.spectators.size);
     this.touch();
   }
@@ -224,10 +255,10 @@ export class Room {
 
   /** คืน `true` ถ้าคนนี้ออกจากห้องผู้ชมจริง (socket หมดแล้ว) */
   removeSpectatorSocket(userId: number, socketId: string): boolean {
-    const sockets = this.spectators.get(userId);
-    if (!sockets) return false;
-    sockets.delete(socketId);
-    if (sockets.size > 0) return false;
+    const spectator = this.spectators.get(userId);
+    if (!spectator) return false;
+    spectator.sockets.delete(socketId);
+    if (spectator.sockets.size > 0) return false;
     this.spectators.delete(userId);
     this.touch();
     return true;
@@ -242,6 +273,8 @@ export class Room {
     // ผลของรอบก่อนยังอยู่ใน DB แต่ไม่ใช่ "ผลของห้องนี้ตอนนี้" แล้ว
     this.lastMatchId = null;
     this.lastMultiplayerMatchId = null;
+    // ไม่งั้นรอบที่ 2 เป็นต้นไปจะบันทึกค่าสูงสุดตลอดอายุห้อง (ADR-079 ข้อ 3)
+    this.peakSpectatorCount = this.spectators.size;
     this.phaseEndsAtTs = null;
     this.serverStartTs = null;
     for (const player of this.players.values()) {
@@ -249,6 +282,16 @@ export class Room {
       player.isReady = false;
     }
     this.touch();
+  }
+
+  /**
+   * ผู้เล่นทุกคนกด "พร้อม" ช่วง inspection ครบแล้ว = **ล็อกแล้ว** (ADR-078 ข้อ 4)
+   *
+   * ไม่มีธงล็อกแยก เพราะค่าพร้อมถูกล้างตอนหลุดเฉพาะ **ก่อน** ครบ และไม่ถูกล้างหลังครบ
+   * สองอย่างนี้จึงเป็นเรื่องเดียวกันเสมอ — client ใช้เงื่อนไขเดียวกันจาก snapshot ได้ด้วย
+   */
+  get inspectionLocked(): boolean {
+    return this.players.size > 0 && [...this.players.values()].every((p) => p.inspectionReady);
   }
 
   /** ผู้เล่นที่ยังแก้อยู่ (ยังไม่ solved / dnf / surrendered) */
@@ -282,6 +325,7 @@ export class Room {
       eloRating: player.eloRating,
       isHost: this.isHost(player.userId),
       isReady: player.isReady,
+      inspectionReady: player.inspectionReady,
       connected: player.sockets.size > 0,
     };
   }
@@ -293,6 +337,30 @@ export class Room {
       status: player.status,
       solveTimeMs: player.solveTimeMs,
     };
+  }
+
+  /** หัวห้องพร้อมชื่อและที่นั่ง — หัวห้องที่เป็นผู้ชมไม่อยู่ใน `players` (ADR-082 ข้อ 3) */
+  hostPublic(): RoomHost | null {
+    if (this.hostUserId === null) return null;
+    const player = this.players.get(this.hostUserId);
+    if (player) {
+      return {
+        userId: player.userId,
+        username: player.username,
+        nickname: player.nickname,
+        seat: 'player',
+      };
+    }
+    const spectator = this.spectators.get(this.hostUserId);
+    if (spectator) {
+      return {
+        userId: spectator.userId,
+        username: spectator.username,
+        nickname: spectator.nickname,
+        seat: 'spectator',
+      };
+    }
+    return null;
   }
 
   snapshot(): RoomSnapshot {
@@ -323,6 +391,7 @@ export class Room {
             : null,
       // ค่าของทั้ง server ไม่ใช่ของห้อง — client ใช้ตัดสินว่าจะแสดงปุ่มทดสอบไหม (ADR-060 ข้อ 3)
       devInstantFinish: env.devInstantFinish,
+      host: this.hostPublic(),
     };
   }
 }

@@ -12,13 +12,14 @@
  *       คิวหลายคนแยกช่องจากคิว 1v1 · Pairwise Elo + แถว `MultiplayerMatch` + participant ·
  *       `Rating` ของทุกคน · `MatchFlag` ผูกกับ `multiplayer_match_id` และไม่มี `WIN_STREAK` ·
  *       `opponent:move` / `opponent:progress` กระจายถูกเมื่อมีผู้เล่นเกิน 2 คน ·
- *       ห้องสร้างเอง 3 คน (โหมด custom ไม่ปรับคะแนน) · ปิดผู้ชม · `E_ROOM_FULL` ·
+ *       ห้องสร้างเอง 3 คน (โหมด custom ไม่ปรับคะแนน) · ผู้ชมห้องหลายคน (ADR-079) · `E_ROOM_FULL` ·
  *       DNF ทั้งห้องต้องไม่พังตอนบันทึก (ADR-041 ข้อ 3)
  */
 import { CubeType, PrismaClient, RoomMode, SolveResult } from '@prisma/client';
 import type { Socket } from 'socket.io-client';
 import {
   API,
+  autoAcceptMatches,
   check,
   connect,
   emit,
@@ -67,6 +68,7 @@ interface MultiplayerMatchDetail {
   roomMode: 'auto' | 'custom';
   playerCount: number;
   winnerId: number | null;
+  spectatorCount: number;
   ratingApplied: boolean;
   players: {
     userId: number;
@@ -165,7 +167,11 @@ async function main(): Promise<void> {
   const players: Player[] = [];
   for (const name of names) {
     const auth = await login(name);
-    players.push({ name, ...auth, socket: await connect(auth.token) });
+    const socket = await connect(auth.token);
+    // เทสชุดนี้ตรวจสิ่งที่เกิดหลังยืนยันครบ — กดยอมรับให้อัตโนมัติ (ADR-077)
+    // การปฏิเสธ/หมดเวลามีเทสของตัวเองอยู่ใน `smoke:queue`
+    autoAcceptMatches(socket);
+    players.push({ name, ...auth, socket });
   }
   const [alice, bob, chai, dao, eve] = players as [Player, Player, Player, Player, Player];
   const quartet = [alice, bob, chai, dao];
@@ -359,11 +365,17 @@ async function main(): Promise<void> {
     [multiRes.status, multiDetail?.multiplayerMatchId],
   );
   check(
-    'REST คืน roomMode / playerCount / ratingApplied ของโหมด auto',
+    'REST คืน roomMode / playerCount / ratingApplied / spectatorCount = 0 ของโหมด auto',
     multiDetail?.roomMode === 'auto' &&
       multiDetail.playerCount === 4 &&
-      multiDetail.ratingApplied === true,
-    [multiDetail?.roomMode, multiDetail?.playerCount, multiDetail?.ratingApplied],
+      multiDetail.ratingApplied === true &&
+      multiDetail.spectatorCount === 0,
+    [
+      multiDetail?.roomMode,
+      multiDetail?.playerCount,
+      multiDetail?.ratingApplied,
+      multiDetail?.spectatorCount,
+    ],
   );
   check(
     'REST เรียงตาม rankNo และ Elo ก่อน→หลัง ตรงกับ match:finished ทุกแถว',
@@ -532,7 +544,7 @@ async function main(): Promise<void> {
   await leaveRoomAll(trio);
 
   // ---------------------------------------------------------------- รอบที่ 4
-  console.log('\nรอบที่ 4 — ห้องสร้างเอง 3 คน: โหมด custom ไม่ปรับคะแนน · ปิดผู้ชม · ห้องเต็ม');
+  console.log('\nรอบที่ 4 — ห้องสร้างเอง 3 คน: โหมด custom ไม่ปรับคะแนน · ผู้ชม (ADR-079) · ห้องเต็ม');
   const created = await emit<{ roomId: number; roomCode: string }>(alice.socket, 'room:create', {
     cubeType: CUBE_TYPE,
     kind: 'multiplayer',
@@ -565,11 +577,24 @@ async function main(): Promise<void> {
     startEarly,
   );
 
-  const asSpectator = await emit(eve.socket, 'room:join', { roomCode, as: 'spectator' });
+  const asSpectator = await emit<{ snapshot: { spectatorCount: number; players: unknown[] } }>(
+    eve.socket,
+    'room:join',
+    { roomCode, as: 'spectator' },
+  );
   check(
-    'ห้องผู้เล่นหลายคนไม่รองรับผู้ชม → E_INVALID_STATE (game-rules.md ข้อ 9)',
-    !asSpectator.ok && asSpectator.error.code === 'E_INVALID_STATE',
+    'ห้องหลายคนโหมด custom รับผู้ชมได้ (ADR-079 — เดิมตอบ E_INVALID_STATE)',
+    asSpectator.ok,
     asSpectator,
+  );
+  check(
+    'ผู้ชมถูกนับใน spectatorCount แต่ไม่กินที่นั่งผู้เล่น',
+    asSpectator.ok &&
+      asSpectator.data.snapshot.spectatorCount === 1 &&
+      asSpectator.data.snapshot.players.length === 2,
+    asSpectator.ok
+      ? [asSpectator.data.snapshot.spectatorCount, asSpectator.data.snapshot.players.length]
+      : asSpectator,
   );
 
   await emit(chai.socket, 'room:join', { roomCode, as: 'player' });
@@ -581,9 +606,30 @@ async function main(): Promise<void> {
   );
 
   const finished4 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished', 120_000);
+  const spectatorFinished4 = waitFor<SmokeMatchResult>(eve.socket, 'match:finished', 120_000);
+  const movesSeenBySpectator = new Set<number>();
+  eve.socket.on('opponent:move', (payload: { userId: number }) =>
+    movesSeenBySpectator.add(payload.userId),
+  );
   await startRound(alice.socket, bob.socket, chai.socket);
+  // ท่าที่ไม่ได้แก้คิวบ์ — แค่ให้มี move ของทุกคนวิ่งถึงผู้ชม
+  for (const player of trio) await sendMoves(player.socket, ['R', 'U']);
+  await sleep(500);
+  check(
+    'ผู้ชมห้องหลายคนได้ opponent:move ของผู้เล่นครบทั้ง 3 คน (socket-events.md ข้อ 9)',
+    trio.every((player) => movesSeenBySpectator.has(player.userId)),
+    [...movesSeenBySpectator],
+  );
+  const spectatorSurrender = await emit(eve.socket, 'solve:surrender', {});
+  check(
+    'ผู้ชมส่งคำสั่งผู้เล่น (solve:surrender) ไม่ได้ → E_INVALID_STATE',
+    !spectatorSurrender.ok && spectatorSurrender.error.code === 'E_INVALID_STATE',
+    spectatorSurrender,
+  );
   await surrenderAll(trio);
   const result4 = await finished4;
+  eve.socket.removeAllListeners('opponent:move');
+  check('ผู้ชมได้ match:finished ด้วย', (await spectatorFinished4) !== null);
 
   check('ห้องสร้างเอง 3 คนเล่นจนจบได้', result4 !== null);
   check('โหมด custom ไม่ปรับคะแนน (ratingApplied = false)', result4?.ratingApplied === false);
@@ -602,6 +648,18 @@ async function main(): Promise<void> {
   check('room_mode = CUSTOM', multi4?.roomMode === RoomMode.CUSTOM, multi4?.roomMode);
   check('player_count = 3', multi4?.playerCount === 3, multi4?.playerCount);
   check('โหมด custom เก็บรหัสห้องไว้', multi4?.roomCode === roomCode, multi4?.roomCode);
+  check(
+    'spectator_count = 1 (ผู้ชมสูงสุดระหว่างแมตช์ — ADR-079)',
+    multi4?.spectatorCount === 1,
+    multi4?.spectatorCount,
+  );
+  const detail4Res = await fetch(`${API}/multiplayer-matches/${multi4?.multiplayerMatchId}`);
+  const detail4 = ((await detail4Res.json()) as { data?: MultiplayerMatchDetail }).data ?? null;
+  check(
+    'GET /multiplayer-matches/:id คืน spectatorCount = 1',
+    detail4Res.status === 200 && detail4?.spectatorCount === 1,
+    [detail4Res.status, detail4?.spectatorCount],
+  );
   check(
     'participant: elo_before / elo_change เป็น NULL ทั้งหมด',
     multi4?.participants.every((row) => row.eloBefore === null && row.eloChange === null) === true,
@@ -632,8 +690,26 @@ async function main(): Promise<void> {
     ]),
   );
 
+  // เล่นซ้ำในห้องเดิมหลังผู้ชมออกไปแล้ว — ค่าสูงสุดต้องนับใหม่ต่อรอบ ไม่ใช่ตลอดอายุห้อง (ADR-079 ข้อ 3)
+  await emit(eve.socket, 'room:leave', {});
+  const finished5 = waitFor<SmokeMatchResult>(alice.socket, 'match:finished', 120_000);
+  await startRound(alice.socket, bob.socket, chai.socket);
+  await surrenderAll(trio);
+  const result5 = await finished5;
+  const multi5 =
+    result5?.matchId == null
+      ? null
+      : await prisma.multiplayerMatch.findUnique({
+          where: { multiplayerMatchId: result5.matchId },
+        });
+  check(
+    'รอบถัดไปในห้องเดิมที่ไม่มีผู้ชมแล้ว → spectator_count = 0 (ไม่ติดค่าของรอบก่อน)',
+    multi5 !== null && multi5.spectatorCount === 0,
+    multi5?.spectatorCount,
+  );
+
   // ---------------------------------------------------------------- เก็บกวาด
-  await leaveRoomAll(trio);
+  await leaveRoomAll([...trio, eve]);
   await sleep(200);
   for (const player of players) player.socket.close();
 

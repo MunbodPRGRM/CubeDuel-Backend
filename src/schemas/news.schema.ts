@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { NEWS_COVERS } from '../constants.js';
 import { dbIdSchema } from './common.schema.js';
 
 /**
  * กฎ validation ของข่าวสาร (docs/api-contract.md ข้อ 7)
  *
- * ฟอร์มของแอดมินส่งมาได้ทั้ง JSON และ `multipart/form-data` — **ค่าที่มาจาก multipart เป็น string เสมอ**
- * (`removeImage` จึงรับ `"true"`/`"false"` ไม่ใช่ boolean แท้)
+ * รับ JSON อย่างเดียว — เลิกอัปโหลดรูปแล้ว ปกเป็นคีย์ที่เว็บวาดให้ (ADR-084)
+ * ฟิลด์ที่ไม่รู้จัก (`image` · `removeImage` ของรุ่นเก่า) ถูก `z.object` ตัดทิ้งเงียบ ๆ
  */
 
 const title = z
@@ -21,10 +22,9 @@ const content = z
   .min(1, 'กรุณากรอกเนื้อหาข่าว')
   .max(20_000, 'เนื้อหาข่าวยาวเกินไป (สูงสุด 20,000 ตัวอักษร)');
 
-const removeImage = z
-  .union([z.boolean(), z.enum(['true', 'false'])])
-  .transform((v) => v === true || v === 'true')
-  .optional();
+const cover = z.enum(NEWS_COVERS, {
+  errorMap: () => ({ message: 'ไม่รู้จักปกข่าวนี้' }),
+});
 
 export const newsListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -33,17 +33,14 @@ export const newsListQuerySchema = z.object({
 
 export const newsIdParamSchema = dbIdSchema('newsId');
 
-export const createNewsSchema = z.object({ title, content, removeImage });
+/** ไม่ส่ง `cover` = ใช้ค่าเริ่มต้นของคอลัมน์ (`general`) */
+export const createNewsSchema = z.object({ title, content, cover: cover.optional() });
 
-/**
- * **ไม่มี `.refine` ว่า "ต้องมีอย่างน้อยหนึ่งช่อง"** ตรงนี้โดยตั้งใจ —
- * การส่งมาแค่ไฟล์รูป (ไม่มีช่องข้อความเลย) เป็นการแก้ที่ถูกต้อง แต่ schema มองไม่เห็นไฟล์
- * → ย้ายไปเช็คที่ `updateNews()` ซึ่งเห็นทั้งสองอย่าง (ADR-049 ข้อ 5)
- */
+/** "ต้องมีอย่างน้อยหนึ่งช่อง" เช็คที่ `updateNews()` — ข้อความ error เดิม ("ไม่มีอะไรให้แก้") อยู่ที่นั่น */
 export const updateNewsSchema = z.object({
   title: title.optional(),
   content: content.optional(),
-  removeImage,
+  cover: cover.optional(),
 });
 
 export type NewsListQueryInput = z.infer<typeof newsListQuerySchema>;

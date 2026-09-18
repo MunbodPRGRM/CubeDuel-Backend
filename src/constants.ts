@@ -7,13 +7,21 @@ export const ELO_INITIAL_RATING = 1000;
 
 export const COUNTDOWN_MS = 3_000;
 export const INSPECTION_MS = 15_000;
+/**
+ * ผู้เล่นทุกคนกด "พร้อม" ครบระหว่าง inspection → จบ inspection **อีกเท่านี้ข้างหน้า** ไม่ใช่ทันที
+ * ให้ทุกเครื่องเห็นเลขนับถอยหลังก่อนเริ่มเหมือนตอนครบ 15 วินาที — ไม่งั้นคนกดคนสุดท้ายรู้วินาทีเริ่มคนเดียว (ADR-078 ข้อ 2)
+ */
+export const INSPECTION_READY_BUFFER_MS = 3_000;
 export const FINAL_COUNTDOWN_MS = 10_000;
 
 /** รอ `solve:ready` ครบทุกคนได้นานสุดเท่านี้ แล้วไปต่อเอง (game-rules.md ข้อ 1) */
 export const LOADING_TIMEOUT_MS = 15_000;
 
-/** เจอคู่แล้วหน่วงให้ดูข้อมูลคู่แข่งเท่านี้ก่อนเข้า LOADING เอง (game-rules.md ข้อ 1) */
-export const MATCHED_DELAY_MS = 2_000;
+/**
+ * เจอกลุ่มแล้วมีเวลากด "เล่นเลย / ยกเลิก" เท่านี้ — หมดเวลา = ปฏิเสธ (game-rules.md ข้อ 8 · ADR-077)
+ * ส่งให้ client เป็น **เวลาสิ้นสุด** (`expiresAtTs`) ไม่ใช่จำนวนวินาที (socket-events.md ข้อ 1)
+ */
+export const READY_CHECK_MS = 12_000;
 
 /** ความถี่ที่กวาดคิวจับคู่ (ADR-039 ข้อ 7) */
 export const QUEUE_TICK_MS = 1_000;
@@ -58,12 +66,16 @@ export const HARD_TIMEOUT_MS: Record<ApiCubeType, number> = {
 /**
  * ทุกประเภทรูบิค — ใช้ตอนสมัครสมาชิกเพื่อสร้างแถว Rating ให้ครบ 4 แถว
  * (database-schema.md ตารางที่ 6: ผู้ใช้ 1 คน = Rating 4 แถวเสมอ)
+ *
+ * ⚠️ ลำดับในนี้ยังคุม**ลำดับของ array ที่ `GET /users/:userId/ratings` ส่งกลับ**ด้วย
+ * จึงเรียงให้ตรงกับ `CUBE_TYPES` ของ frontend (เฟส 13 ก้อนที่ 3 · 2026-09-16)
+ * — **จงใจไม่ตรงกับลำดับของ `enum CubeType` ใน `schema.prisma`** ห้ามเรียงใหม่ให้ตรงกับ schema
  */
 export const ALL_CUBE_TYPES: CubeType[] = [
   CubeType.CUBE_2X2X2,
   CubeType.CUBE_3X3X3,
-  CubeType.PYRAMINX,
   CubeType.PYRAMORPHIX,
+  CubeType.PYRAMINX,
 ];
 
 /** cost ของ bcrypt — ยิ่งสูงยิ่งช้าและยิ่งทนการเดารหัสผ่าน */
@@ -91,11 +103,25 @@ export const OAUTH_STATE_TTL_MS = 10 * 60_000;
  *
  * **จานสีจริงอยู่ฝั่ง frontend** (`frontend/src/cube/three/colors.ts`) — ที่นี่รู้แค่ว่ารหัสไหนใช้ได้
  * เพราะสีเป็นเรื่องของการแสดงผลล้วน ๆ server ไม่ได้ใช้ทำอะไรเลย (ADR-048 ข้อ 2)
- * เพิ่มสกินใหม่ต้องแก้ **สองที่พร้อมกัน** ที่นี่กับไฟล์นั้น ไม่มีอะไรเตือนถ้าลืม (ADR-021)
+ * เพิ่มสกินใหม่ต้องแก้ **สองที่พร้อมกัน** ที่นี่กับไฟล์นั้น (ADR-021) — `npm run verify:skins` ฝั่ง frontend
+ * เทียบรายชื่อให้เมื่อมีโฟลเดอร์ `backend/` อยู่ข้าง ๆ (ADR-080 ข้อ 4) · ลำดับไม่มีผลกับ server
+ *
+ * **ADR-087 (เฟส 13 ก้อนที่ 25):** เหลือ `classic` + 4 สกินที่มีลวดลาย · รหัสเดิม 11 ตัวถูกลบ
+ * ค่าที่ค้างใน DB ย้ายกลับเป็น `classic` ด้วย migration `20260918000000_skin_patterns`
  */
-export const CUBE_SKINS = ['classic', 'pastel', 'neon', 'contrast'] as const;
+export const CUBE_SKINS = ['classic', 'carbon', 'honeycomb', 'marble', 'brushed'] as const;
 export type CubeSkinId = (typeof CUBE_SKINS)[number];
 export const DEFAULT_CUBE_SKIN: CubeSkinId = 'classic';
+
+/**
+ * คีย์ปกข่าวที่ยอมให้เก็บลง `News.cover` (api-contract.md ข้อ 7 · ADR-084)
+ *
+ * **หน้าตาของปกอยู่ฝั่ง frontend** (`frontend/src/news/news-covers.ts`) — ที่นี่รู้แค่ว่าคีย์ไหนใช้ได้
+ * แบบเดียวกับ `CUBE_SKINS` · เพิ่มปกใหม่ต้องแก้ **สองที่พร้อมกัน** (ADR-021) · เก็บเป็น VARCHAR จึงไม่ต้อง migrate
+ */
+export const NEWS_COVERS = ['general', 'update', 'maintenance', 'penalty', 'event'] as const;
+export type NewsCoverId = (typeof NEWS_COVERS)[number];
+export const DEFAULT_NEWS_COVER: NewsCoverId = 'general';
 
 /**
  * งานเบื้องหลัง (เฟส 10 ก้อนที่ 1 — `src/jobs/`)

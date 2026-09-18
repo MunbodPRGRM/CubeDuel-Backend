@@ -16,6 +16,7 @@ import {
   FINAL_COUNTDOWN_MS,
   HARD_TIMEOUT_MS,
   INSPECTION_MS,
+  INSPECTION_READY_BUFFER_MS,
   LOADING_TIMEOUT_MS,
   MAX_LATENCY_COMPENSATION_MS,
   MULTIPLAYER_ROOM_MIN,
@@ -43,6 +44,8 @@ import {
   type MatchResult,
   type MatchResultEntry,
   type SolveCameraPayload,
+  type SolveInspectionReadyPayload,
+  type SolveInspectionReadyResult,
   type SolveMovePayload,
   type SolveSolvedPayload,
   type SolveSolvedResult,
@@ -172,8 +175,66 @@ function beginInspection(io: TypedServer, room: Room): void {
 
   emitToRoom(io, room, 'match:inspection_started', { endsAtTs, durationMs: INSPECTION_MS });
   broadcastState(io, room);
-  // ห้องแข่ง **กดข้ามไม่ได้** ทุกคนต้องเริ่มพร้อมกัน (ข้ามได้เฉพาะห้องฝึกซ้อม — ADR-032)
+  // ห้องแข่ง **ข้ามคนเดียวไม่ได้** ทุกคนต้องเริ่มพร้อมกัน (ข้ามได้เฉพาะห้องฝึกซ้อม — ADR-032)
+  // จบก่อนเวลาได้ทางเดียวคือพร้อมครบทุกคน → `lockInspectionIfAllReady()` ตั้งตัวจับเวลานี้ใหม่ (ADR-078)
   room.phaseTimer = setTimeout(() => beginSolving(io, room), INSPECTION_MS);
+}
+
+/**
+ * `solve:inspection_ready` — กด/ยกเลิก "พร้อม" ช่วง inspection (ADR-078 · game-rules.md ข้อ 2)
+ *
+ * ส่งค่าเดิมซ้ำไม่ใช่ error — ตอบตัวเลขปัจจุบันเฉย ๆ ไม่ broadcast ซ้ำ (กดซ้ำจากสองแท็บได้)
+ */
+export function handleInspectionReady(
+  io: TypedServer,
+  room: Room,
+  userId: number,
+  payload: SolveInspectionReadyPayload,
+): SolveInspectionReadyResult {
+  const player = requirePlayer(room, userId);
+  if (room.state !== 'INSPECTION') {
+    throw socketErrors.invalidState('กดพร้อมได้เฉพาะช่วงตรวจสอบคิวบ์');
+  }
+  // ล็อกแล้ว = ประกาศเวลาเริ่มใหม่ไปแล้ว ถอนคืนไม่ได้ (ADR-078 ข้อ 1)
+  if (room.inspectionLocked) throw socketErrors.invalidState('ทุกคนพร้อมแล้ว กำลังจะเริ่มจับเวลา');
+
+  if (player.inspectionReady !== payload.ready) {
+    player.inspectionReady = payload.ready;
+    room.touch();
+    emitToRoom(io, room, 'player:inspection_ready', { userId, ready: payload.ready });
+    lockInspectionIfAllReady(io, room);
+    broadcastState(io, room);
+  }
+
+  const players = [...room.players.values()];
+  return {
+    readyCount: players.filter((entry) => entry.inspectionReady).length,
+    playerCount: players.length,
+  };
+}
+
+/**
+ * ผู้เล่นทุกคน **ต่ออยู่และพร้อม** → จบ inspection อีก 3 วินาทีข้างหน้า (ADR-078 ข้อ 2)
+ *
+ * 🔴 ห้ามเรียก `beginSolving()` ตรง ๆ — ไม่มีใครได้เห็นเลขนับถอยหลัง และคนที่กดคนสุดท้าย
+ * เป็นคนเดียวที่รู้วินาทีเริ่ม · ประกาศ `endsAtTs` ล่วงหน้าให้ทุกเครื่องนับเองเหมือนตอนครบ 15 วินาที
+ * เหลือเวลาไม่ถึง buffer อยู่แล้วก็ปล่อยตัวจับเวลาเดิม (ห้ามยืดออก)
+ *
+ * ผู้เรียกเป็นคน `broadcastState()` เอง
+ */
+function lockInspectionIfAllReady(io: TypedServer, room: Room): void {
+  if (room.state !== 'INSPECTION' || room.phaseEndsAtTs === null) return;
+  const players = [...room.players.values()];
+  if (players.length === 0) return;
+  if (!players.every((player) => player.inspectionReady && player.sockets.size > 0)) return;
+
+  const endsAtTs = Date.now() + INSPECTION_READY_BUFFER_MS;
+  if (endsAtTs >= room.phaseEndsAtTs) return;
+
+  room.clearPhaseTimer();
+  room.phaseEndsAtTs = endsAtTs;
+  emitToRoom(io, room, 'match:inspection_shortened', { endsAtTs });
+  room.phaseTimer = setTimeout(() => beginSolving(io, room), INSPECTION_READY_BUFFER_MS);
 }
 
 function beginSolving(io: TypedServer, room: Room): void {
@@ -459,6 +520,12 @@ function markDnf(io: TypedServer, room: Room, player: RoomPlayer, reason: DnfRea
  * — ต้องเดินหน้าต่อเอง ไม่งั้นห้องจะค้างรอ `solve:ready` ของคนที่ไม่อยู่แล้วจนหมด 15 วินาที
  */
 function resumeAfterPlayerLeft(io: TypedServer, room: Room): void {
+  // คนที่เหลือพร้อมครบอยู่แล้ว → จบ inspection ก่อนเวลาได้เลย (ADR-078 ข้อ 3)
+  if (room.state === 'INSPECTION') {
+    lockInspectionIfAllReady(io, room);
+    broadcastState(io, room);
+    return;
+  }
   if (room.state !== 'LOADING') return;
   if (![...room.players.values()].every((player) => player.loaded)) return;
   room.clearPhaseTimer();
@@ -473,6 +540,12 @@ export function beginDisconnectGrace(io: TypedServer, room: Room, userId: number
   const player = room.players.get(userId);
   if (!player || room.state === 'ABORTED') return;
   if (room.graceTimers.has(userId)) return;
+
+  // หลุดก่อนพร้อมครบ → ล้างพร้อมของคนนั้น ห้องจึงรอครบ 15 วินาที · หลังล็อกแล้วไม่ย้อน (ADR-078 ข้อ 3)
+  if (room.state === 'INSPECTION' && player.inspectionReady && !room.inspectionLocked) {
+    player.inspectionReady = false;
+    emitToRoom(io, room, 'player:inspection_ready', { userId, ready: false });
+  }
 
   const graceEndsAtTs = Date.now() + DISCONNECT_GRACE_MS;
   emitToRoom(io, room, 'player:disconnected', { userId, graceEndsAtTs });
@@ -628,6 +701,7 @@ export async function finishMatch(io: TypedServer, room: Room, cause: FinishCaus
             cubeType: room.cubeType,
             scramble: room.scramble,
             roomCode: room.roomCode,
+            spectatorCount: room.peakSpectatorCount,
             startedAtTs: room.serverStartTs ?? finishedAtTs,
             finishedAtTs,
             winnerId,

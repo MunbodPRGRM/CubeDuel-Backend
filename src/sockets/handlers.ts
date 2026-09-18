@@ -12,7 +12,9 @@ import {
   roomJoinSchema,
   roomReadySchema,
   roomRejoinSchema,
+  roomSwitchSeatSchema,
   solveCameraSchema,
+  solveInspectionReadySchema,
   solveMoveSchema,
   solveSolvedSchema,
 } from '../schemas/socket.schema.js';
@@ -20,6 +22,7 @@ import { on, type TypedServer, type TypedSocket } from './ack.js';
 import { socketErrors } from './errors.js';
 import {
   handleDevFinish,
+  handleInspectionReady,
   handleMove,
   handleSolved,
   handleSurrender,
@@ -27,7 +30,7 @@ import {
   relayCamera,
   startMatch,
 } from './match.js';
-import { joinQueue, leaveQueue } from './queue.js';
+import { acceptMatch, declineMatch, joinQueue, leaveQueue } from './queue.js';
 import { createRoom, getRoom, getRoomByCode, membershipOf } from './room-registry.js';
 import type { Room } from './room.js';
 import {
@@ -37,6 +40,7 @@ import {
   joinAsSpectator,
   leavePreviousRoom,
   leaveRoom,
+  switchSeat,
 } from './room-service.js';
 
 /** เพดานของ RTT ที่ยอมรับจาก client — สูงกว่านี้ถือว่าเน็ตเสียหรือค่าปลอม */
@@ -70,15 +74,21 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
   on(socket, 'queue:join', queueJoinSchema, (socket, payload) => joinQueue(io, socket, payload));
 
   on(socket, 'queue:leave', emptyPayloadSchema, (socket) => ({
-    left: leaveQueue(socket.data.userId),
+    left: leaveQueue(io, socket.data.userId),
   }));
+
+  /** เจอกลุ่มแล้วต้องกดยืนยันก่อน ห้องถึงจะถูกสร้าง (ADR-077) */
+  on(socket, 'queue:accept', emptyPayloadSchema, (socket) => acceptMatch(io, socket));
+
+  /** ปฏิเสธ = ออกจากคิว · ไม่มีคูลดาวน์ และไม่นับว่าเคยเจอคู่นั้น (ADR-077 ข้อ 2) */
+  on(socket, 'queue:decline', emptyPayloadSchema, (socket) => declineMatch(io, socket));
 
   // ---------------------------------------------------------------- ห้อง
 
   on(socket, 'room:create', roomCreateSchema, async (socket, payload) => {
     // อยู่ในห้องพร้อมกับอยู่ในคิวไม่ได้ (socket-events.md ข้อ 4) — ทางกลับของ `joinQueue()`
     // ที่พาออกจากห้องให้เอง · ถ้าไม่ล้างตรงนี้ คิวจะดึงคนที่อยู่ในห้องอื่นออกไปกลางคัน
-    leaveQueue(socket.data.userId);
+    leaveQueue(io, socket.data.userId);
     leavePreviousRoom(io, socket);
     const room = createRoom({
       // `competitive` ผ่าน schema มาได้เฉพาะตอนเปิดสวิตช์ทดสอบบนเครื่อง dev (ADR-038 ข้อ 5)
@@ -99,8 +109,13 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     const room = getRoomByCode(payload.roomCode);
     if (!room) throw socketErrors.roomNotFound();
 
-    leaveQueue(socket.data.userId);
+    leaveQueue(io, socket.data.userId);
     leavePreviousRoom(io, socket, room.roomId);
+    // อยู่ห้องนี้แล้วแต่คนละที่นั่ง = สลับที่นั่ง · เดิมได้ที่นั่งซ้อนทั้งสองฝั่ง (ADR-082 ข้อ 1)
+    const current = membershipOf(socket.data.userId);
+    if (current?.roomId === room.roomId && current.seat !== payload.as) {
+      await switchSeat(io, socket, payload.as);
+    }
     if (payload.as === 'spectator') await joinAsSpectator(io, socket, room);
     else await joinAsPlayer(io, socket, room);
 
@@ -149,6 +164,12 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     return null;
   });
 
+  /** สลับผู้เล่น ↔ ผู้ชมในห้องเดิม — สิทธิ์หัวห้องไม่หลุด (ADR-082) */
+  on(socket, 'room:switch_seat', roomSwitchSeatSchema, async (socket, payload) => {
+    const room = await switchSeat(io, socket, payload.to);
+    return { snapshot: room.snapshot() };
+  });
+
   // ---------------------------------------------------------------- ลำดับการแข่ง
 
   on(socket, 'room:start', emptyPayloadSchema, async (socket) => {
@@ -160,6 +181,11 @@ export function registerHandlers(io: TypedServer, socket: TypedSocket): void {
     markLoaded(io, requireRoom(socket), socket.data.userId);
     return null;
   });
+
+  // ปุ่ม "พร้อม" ช่วง inspection — คนละตัวกับ `solve:ready` ด้านบน (ADR-078)
+  on(socket, 'solve:inspection_ready', solveInspectionReadySchema, (socket, payload) =>
+    handleInspectionReady(io, requireRoom(socket), socket.data.userId, payload),
+  );
 
   // ไม่มี ack — client ส่งแล้วไปต่อเลย ผิดเมื่อไรได้ event `error` กลับไป
   on(socket, 'solve:move', solveMoveSchema, (socket, payload) => {

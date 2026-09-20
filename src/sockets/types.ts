@@ -39,6 +39,13 @@ export interface PlayerPublic {
   nickname: string | null;
   /** Elo ของ cube_type ที่กำลังแข่ง (ไม่ใช่ค่ารวม — Rating แยก 4 แถวต่อคน) */
   eloRating: number;
+  /**
+   * สกินของ **เจ้าของลูกนี้** — ทุกคนในห้องวาดคิวบ์ของเขาด้วยรหัสนี้ (ADR-089)
+   *
+   * server ยังไม่รู้จักจานสี รู้แค่รหัส (`CUBE_SKINS`) หน้าที่เดียวคือส่งต่อให้คนอื่นในห้อง
+   * · อ่านตอนเข้าห้องครั้งเดียวเหมือน `eloRating` **ห้ามอัปเดตระหว่างอยู่ในห้อง** (ADR-089 ข้อ 3)
+   */
+  cubeSkin: string;
   isHost: boolean;
   /** ป้ายพร้อมในล็อบบี้ห้องสร้างเอง (`room:ready`) — ใช้ตอน `WAITING` เท่านั้น */
   isReady: boolean;
@@ -422,6 +429,8 @@ export interface SocketData {
   userId: number;
   username: string;
   nickname: string | null;
+  /** สกินคิวบ์ของบัญชีนี้ตอน handshake — ติดไปกับ `RoomPlayer` ตอนเข้าห้อง (ADR-089) */
+  cubeSkin: string;
   role: 'member' | 'admin';
   /** RTT ล่าสุดจาก `net:ping` — ใช้ชดเชยเวลาตอนตัดสินผล (game-rules.md ข้อ 3) */
   rttMs: number | null;

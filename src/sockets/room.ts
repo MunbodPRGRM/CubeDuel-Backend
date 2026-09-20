@@ -35,6 +35,13 @@ export interface RoomPlayer {
   nickname: string | null;
   /** Elo ของ cubeType ที่ห้องนี้แข่ง — อ่านตอนเข้าห้อง ไม่อัปเดตระหว่างอยู่ในห้อง */
   eloRating: number;
+  /**
+   * สกินคิวบ์ของคนนี้ — **อ่านตอนเข้าห้อง ไม่อัปเดตระหว่างอยู่ในห้อง** เหมือน `eloRating` (ADR-089 ข้อ 3)
+   *
+   * เปลี่ยนค่ากลางรอบจะทำให้ฝั่ง client สร้าง `CubeView` ของลูกนี้ใหม่ทั้งลูก
+   * แล้วท่าที่สะท้อนไว้หายหมดโดยกู้ไม่ได้ (snapshot ไม่มี move stream — ADR-037 ข้อ 4)
+   */
+  cubeSkin: string;
   isReady: boolean;
   /** socket ทุกตัวของผู้เล่นคนนี้ — ว่าง = หลุดการเชื่อมต่ออยู่ */
   sockets: Set<string>;
@@ -193,7 +200,7 @@ export class Room {
   // ---------------------------------------------------------------- ผู้เล่น
 
   addPlayer(
-    profile: Pick<RoomPlayer, 'userId' | 'username' | 'nickname' | 'eloRating'>,
+    profile: Pick<RoomPlayer, 'userId' | 'username' | 'nickname' | 'eloRating' | 'cubeSkin'>,
   ): RoomPlayer {
     const player: RoomPlayer = {
       ...profile,
@@ -323,6 +330,7 @@ export class Room {
       username: player.username,
       nickname: player.nickname,
       eloRating: player.eloRating,
+      cubeSkin: player.cubeSkin,
       isHost: this.isHost(player.userId),
       isReady: player.isReady,
       inspectionReady: player.inspectionReady,

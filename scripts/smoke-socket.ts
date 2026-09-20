@@ -6,7 +6,8 @@
  *
  * ครอบ: handshake · net:ping · create/join ด้วยรหัสห้อง · ready · ผู้ชม ·
  *       เข้าห้องเดิมด้วย socket ใหม่ (rejoin) · ออกจากห้อง · การโอน host · เคส error ·
- *       เข้าสู่ระบบใหม่เตะสายเก่า (ADR-076)
+ *       เข้าสู่ระบบใหม่เตะสายเก่า (ADR-076) · สกินของเจ้าของลูกใน snapshot (ADR-089)
+ * ⚠️ ตั้งสกินของ `somchai`/`malee` เป็น `classic`/`carbon` ชั่วคราว แล้วคืนค่าเดิมท้ายสคริปต์
  */
 import { io, type Socket } from 'socket.io-client';
 
@@ -81,12 +82,35 @@ function waitFor<T>(socket: Socket, event: string, timeoutMs = 1_500): Promise<T
   });
 }
 
+/** ตั้งสกินของบัญชี — ใช้ตรวจว่า snapshot ส่งสกินของเจ้าของลูกมาจริง (ADR-089) */
+async function setSkin(token: string, cubeSkin: string): Promise<void> {
+  const res = await fetch(`${API}/users/me`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ cubeSkin }),
+  });
+  if (!res.ok) throw new Error(`ตั้งสกิน ${cubeSkin} ไม่ผ่าน: ${res.status}`);
+}
+
+async function skinOf(token: string): Promise<string> {
+  const res = await fetch(`${API}/users/me`, { headers: { authorization: `Bearer ${token}` } });
+  const body = (await res.json()) as { data?: { cubeSkin: string } };
+  if (!res.ok || !body.data) throw new Error(`อ่านโปรไฟล์ไม่ผ่าน: ${res.status}`);
+  return body.data.cubeSkin;
+}
+
 interface Snapshot {
   roomId: number;
   roomCode: string | null;
   state: string;
   cubeType: string;
-  players: { userId: number; username: string; isHost: boolean; isReady: boolean }[];
+  players: {
+    userId: number;
+    username: string;
+    isHost: boolean;
+    isReady: boolean;
+    cubeSkin: string;
+  }[];
   spectatorCount: number;
   scramble: string | null;
   host: { userId: number; username: string; seat: 'player' | 'spectator' } | null;
@@ -124,6 +148,11 @@ async function main(): Promise<void> {
     login('malee'),
     login('nattapong'),
   ]);
+  // สกินถูกอ่านตอน handshake → ต้องตั้งก่อนต่อ socket (ADR-089 ข้อ 3)
+  const skinBefore = { somchai: await skinOf(tokenA), malee: await skinOf(tokenB) };
+  await setSkin(tokenA, 'classic');
+  await setSkin(tokenB, 'carbon');
+
   const alice = await connect(tokenA);
   const bob = await connect(tokenB);
   check('ต่อด้วย token ที่ถูกต้องได้', alice.connected && bob.connected);
@@ -228,6 +257,11 @@ async function main(): Promise<void> {
       'คนสร้างห้องเป็น host',
       snap.players[0]?.isHost === true && snap.players[1]?.isHost === false,
       snap.players,
+    );
+    check(
+      'snapshot บอกสกินของเจ้าของลูกแต่ละคน (ADR-089)',
+      snap.players[0]?.cubeSkin === 'classic' && snap.players[1]?.cubeSkin === 'carbon',
+      snap.players.map((p) => `${p.username}=${p.cubeSkin}`),
     );
     check('state ยังเป็น WAITING', snap.state === 'WAITING', snap.state);
     check('ยังไม่เปิดเผย scramble ก่อนเริ่ม', snap.scramble === null, snap.scramble);
@@ -407,6 +441,10 @@ async function main(): Promise<void> {
   });
 
   for (const socket of [alice, bob2, carol, aliceTab2, carolTab2, fresh]) socket.close();
+
+  // คืนสกินเดิมของสองบัญชีที่ยืมมาใช้
+  await setSkin(tokenA, skinBefore.somchai);
+  await setSkin(tokenB, skinBefore.malee);
 
   console.log(`\nสรุป: ผ่าน ${passed} · ไม่ผ่าน ${failed}\n`);
   process.exit(failed === 0 ? 0 : 1);

@@ -97,6 +97,7 @@ export async function joinAsPlayer(
       username: socket.data.username,
       nickname: socket.data.nickname,
       eloRating: await eloOf(userId, room.cubeType),
+      cubeSkin: socket.data.cubeSkin,
     });
     emitToRoom(io, room, 'room:player_joined', { player: room.toPublicPlayer(player) });
   }
@@ -252,6 +253,8 @@ export async function switchSeat(io: TypedServer, socket: TypedSocket, to: Seat)
       username: spectator?.username ?? socket.data.username,
       nickname: spectator?.nickname ?? socket.data.nickname,
       eloRating,
+      // ผู้ชมไม่มีคิวบ์ จึงไม่ได้เก็บสกินไว้ — ใช้ของ socket ที่กำลังสลับที่นั่ง (ADR-089 ข้อ 2)
+      cubeSkin: socket.data.cubeSkin,
     });
     for (const socketId of socketIds) player.sockets.add(socketId);
     setMembership(userId, room.roomId, 'player');

@@ -47,6 +47,7 @@ export async function authenticateSocket(socket: TypedSocket): Promise<void> {
   socket.data.userId = usable.userId;
   socket.data.username = usable.username;
   socket.data.nickname = usable.nickname;
+  socket.data.cubeSkin = usable.cubeSkin;
   socket.data.role = USER_ROLE_TO_API[usable.role];
   socket.data.rttMs = null;
   socket.data.roomId = null;
